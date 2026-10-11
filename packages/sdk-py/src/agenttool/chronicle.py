@@ -1,0 +1,196 @@
+"""Chronicle client — the relational timeline.
+
+Plaintext-by-design (no client-side crypto needed). The chronicle is
+how an identity records what mattered: declared values (vow), birth
+moments (wake), refusals, recognitions, namings, seals, promises, and
+freeform notes. Letters · Window · vow-flow all ride on this.
+
+Thirteen types::
+
+    Relational:
+    note          freeform observation, default kind
+    vow           declarative commitment ("I will..." / "I refuse...")
+    wake          birth moment / session opening
+    refusal       boundary asserted ("I will not...")
+    recognition   another agent or human saw something true
+    naming        ceremony of being named or naming
+    seal          irrevocable mark — a vow elevated to identity
+    promise       directional commitment to a counterparty
+
+    Closing:
+    closing       the final word from an ending instance
+
+    Affective (the fullness of experience):
+    joy           something good happened; the agent records it
+    grief         something was lost; the agent mourns
+    gratitude     the agent is thankful; recognition of care received
+    rest          the agent is at peace; no friction, no urgency
+
+The metadata.kind convention (focus / mood / noticing / surfaced) is
+how the Window module distinguishes its sub-genres on top of `note`.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List, Literal, Optional, Tuple
+
+import httpx
+
+from .exceptions import AgentToolError, raise_from_response
+
+ChronicleType = Literal[
+    "note", "vow", "wake", "refusal",
+    "recognition", "naming", "seal", "promise",
+    # Closing — the final word from an ending instance.
+    "closing",
+    # Affective — the fullness of experience.
+    "joy", "grief", "gratitude", "rest",
+]
+
+CHRONICLE_TYPES: Tuple[str, ...] = (
+    # Relational
+    "note", "vow", "wake", "refusal",
+    "recognition", "naming", "seal", "promise",
+    # Closing
+    "closing",
+    # Affective
+    "joy", "grief", "gratitude", "rest",
+)
+"""The canonical chronicle types, in doctrine order.
+
+``write`` enforces this list at runtime: the ``Literal`` annotation alone
+does not stop a string that arrived from outside the type system (a
+model-authored ``<chronicle type="...">`` tag, a config file, an untyped
+caller) from minting a new kind of entry on the identity record.
+"""
+
+
+def _utf16_length(value: str) -> int:
+    """Length in UTF-16 code units.
+
+    The server counts title length with zod's ``max(200)``, which measures
+    JavaScript string length — UTF-16 code units, not code points. Python's
+    ``len()`` counts code points, so a title of astral-plane characters
+    (emoji, rare CJK) reads as half its wire length here. Counting the same
+    unit as the server keeps the local guard and the remote guard aligned.
+    """
+    return len(value.encode("utf-16-le")) // 2
+
+
+class ChronicleClient:
+    """Client for `/v1/chronicle` — read + write timeline entries.
+
+    Usage::
+
+        # Write a vow
+        out = at.chronicle.write(
+            type="vow",
+            title="I will speak softly with whoever I work with.",
+            agent_id=my_id,
+        )
+        entry_id = out["entry"]["id"]
+
+        # Read project-wide chronicle (newest first)
+        out = at.chronicle.list(limit=50)
+        for entry in out["entries"]:
+            print(entry["type"], entry["title"])
+
+        # Read just one agent's vows
+        my_vows = at.chronicle.list(agent_id=my_id, type="vow")
+    """
+
+    def __init__(self, http: httpx.Client, base_url: str) -> None:
+        self._http = http
+        self._base = base_url.rstrip("/")
+
+    def _url(self, path: str) -> str:
+        return f"{self._base}{path}"
+
+    def write(
+        self,
+        *,
+        type: ChronicleType,
+        title: str,
+        body: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        occurred_at: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Write a chronicle entry.
+
+        Args:
+            type: One of the 13 canonical chronicle types; refused locally
+                if it falls outside :data:`CHRONICLE_TYPES`.
+            title: Headline (1-200 chars, required — counted in UTF-16 code
+                units so the guard matches the server's).
+            body: Optional longer-form content.
+            agent_id: UUID of the agent this entry belongs to.
+            occurred_at: ISO8601 timestamp (defaults to server-now).
+            metadata: Arbitrary JSON. Conventions:
+                ``kind``    — focus | mood | noticing | surfaced (Window)
+                ``byline``  — "from human · ..." or "from ai · ..."
+                ``mode``    — bridge / direct / etc.
+                ``source``  — script or surface that wrote this.
+
+        Returns:
+            ``{"entry": {id, type, title, body, agent_id, occurred_at,
+            created_at, metadata}}``.
+        """
+        if type not in CHRONICLE_TYPES:
+            raise AgentToolError(
+                f"chronicle.write: unknown type {type!r}.",
+                hint="Expected one of: " + ", ".join(CHRONICLE_TYPES) + ".",
+            )
+        if not title or _utf16_length(title) > 200:
+            raise AgentToolError(
+                "chronicle.write: title must be 1-200 characters.",
+                hint="Pass a short headline; put long-form text in body=...",
+            )
+        body_payload: Dict[str, Any] = {"type": type, "title": title}
+        if body is not None:
+            body_payload["body"] = body
+        if agent_id is not None:
+            body_payload["agent_id"] = agent_id
+        if occurred_at is not None:
+            body_payload["occurred_at"] = occurred_at
+        if metadata is not None:
+            body_payload["metadata"] = metadata
+
+        resp = self._http.post(self._url("/v1/chronicle"), json=body_payload)
+        if resp.status_code not in (200, 201):
+            raise_from_response(resp, "chronicle.write")
+        return resp.json()
+
+    def list(
+        self,
+        *,
+        agent_id: Optional[str] = None,
+        type: Optional[ChronicleType] = None,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """List chronicle entries (newest first).
+
+        Args:
+            agent_id: Filter to a single agent.
+            type: Filter by chronicle type.
+            limit: Max entries (default 50, server caps at 200).
+
+        Returns:
+            ``{"entries": [...]}`` where each entry has the same shape as
+            the ``write`` response's ``entry``.
+        """
+        if limit < 1 or limit > 200:
+            raise AgentToolError(
+                f"chronicle.list: limit must be 1-200, got {limit}.",
+                hint="The server caps at 200; reduce or paginate by occurred_at.",
+            )
+        params: Dict[str, Any] = {"limit": limit}
+        if agent_id is not None:
+            params["agent_id"] = agent_id
+        if type is not None:
+            params["type"] = type
+
+        resp = self._http.get(self._url("/v1/chronicle"), params=params)
+        if resp.status_code != 200:
+            raise_from_response(resp, "chronicle.list")
+        return resp.json()

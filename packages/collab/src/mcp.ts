@@ -1,0 +1,1181 @@
+import { McpServer } from "@modelcontextprotocol/server";
+import { z } from "zod";
+import { anchorStatusForWorkspace } from "./anchor-status.js";
+import { CollabError } from "./errors.js";
+import {
+  DEFAULT_WAIT_EVENT_LIMIT,
+  EVIDENCE_REFS_DESCRIPTION,
+  MAX_WAIT_EVENT_LIMIT,
+  MAX_WAIT_MS,
+  MAX_WAIT_RESPONSE_BYTES,
+  type EventCursor,
+  type SessionHandle,
+  type TaskStatus,
+} from "./protocol.js";
+import {
+  removeSessionCredentialFile,
+  writeSessionCredentialFile,
+} from "./session-file.js";
+import { CollabStore } from "./store.js";
+
+const DEFAULT_MCP_NEXT_EVENT_LIMIT = 10;
+const actorLabel = z.string().min(1).max(200)
+  .describe("Stable display label; session credentials, not this label, fence session mutations");
+const legacyActor = actorLabel.optional();
+const key = z.string().min(1).max(200).describe("Unique retry-safe key for this mutation");
+const workspaceId = z.string().min(1)
+  .describe("Workspace ID returned by workspace open or credential-bound session start");
+const sessionId = z.string().min(1).max(200).describe("Presence session ID");
+const sessionExpectedVersion = z.number().int().positive()
+  .describe("Presence session version last read by the caller");
+const presenceTtlSeconds = z.number().int().min(30).max(3600).optional()
+  .describe("Presence routing hint lifetime; default 120 seconds");
+const taskId = z.string().min(1).describe("Task ID");
+const leaseId = z.string().min(1).describe("Lease ID returned by claim, recovery, or handoff acceptance");
+const expectedVersion = z.number().int().positive().describe("Task version last read by the caller");
+const ttlSeconds = z.number().int().min(30).max(3600).optional()
+  .describe("Lease duration; default 900 seconds, maximum 3600");
+const eventAnchor = z.object({
+  epoch_id: z.string().min(1),
+  sequence: z.number().int().nonnegative(),
+  hash: z.string().length(64),
+});
+const evidenceRefs = z.array(z.string().min(1).max(2000)).max(128).optional()
+  .describe(EVIDENCE_REFS_DESCRIPTION);
+const nextEventLimit = z.number().int().min(1).max(50).optional()
+  .describe(`Maximum events in this page; defaults to ${DEFAULT_MCP_NEXT_EVENT_LIMIT} for MCP polling`);
+
+const localReadOnly = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
+
+const localRetrySafeMutation = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
+
+const localMutation = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false,
+} as const;
+
+const localDestructiveMutation = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: false,
+} as const;
+
+export interface CollabMcpServerOptions {
+  resumed_session?: {
+    handle: SessionHandle;
+    credential_file: string;
+  };
+}
+
+interface BoundSession {
+  handle: SessionHandle;
+  credential_file: string;
+}
+
+export function buildCollabMcpServer(
+  store: CollabStore,
+  options: CollabMcpServerOptions = {},
+): McpServer {
+  let binding: BoundSession | null = options.resumed_session ?? null;
+  const server = new McpServer(
+    { name: "agenttool-collab", version: "0.5.0" },
+    {
+      capabilities: { tools: {} },
+      instructions:
+        "Collab 0.5.0: collab_events_wait offers bounded read-only anchored observation for an already running host, " +
+        "without acknowledging, refreshing presence, or renewing leases; continue from next_anchor, never head. " +
+        "Local-first coordination journal for honest exchange among independent coding-agent sessions. " +
+        "Use collab_session_start once per credential-bound MCP process, then collab_next; a host restart resumes from the " +
+        "mode-0600 credential file without exposing its bearer token to the model. Exchange observations, " +
+        "inferences, proposals, or authorised decisions as structured reports with evidence, confidence, " +
+        "limits, and explicit authority scope. Claim before editing overlapping path scopes and renew long " +
+        "work. An advisory coordination lease is not ownership, a filesystem lock, or authority. Edit-task " +
+        "completion is actor-reported and remains pending until a distinct session accepts it. Challenges " +
+        "remain append-only disagreement; acknowledgement means processed, not agreed. Expired session " +
+        "leases require explicit recovery. Git checkpoints are local evidence, not attribution or atomic " +
+        "Git/SQLite locks. Store concise coordination facts only—never credentials, prompts, transcripts, " +
+        "chain-of-thought, or sensitive source content. Cursor rollback recovery must be enabled by the host " +
+        "and completed with an audited cursor reset before session mutations resume. The host owns spawning, " +
+        "wakeups, waiting, and stopping. The separate collab_session_join/list/heartbeat/leave tools preserve " +
+        "the public v0.2 self-declared presence plane; they provide routing hints only and never authenticate a caller. " +
+        "The read-only collab_anchor_status tool can compare this journal with an optional local Zerone witness sidecar; " +
+        "it never contacts a chain, broadcasts, spends funds, or turns an anchor into truth or authority.",
+    },
+  );
+
+  const waitShutdown = new AbortController();
+  let activeWaits = 0;
+  const close = server.close.bind(server);
+  server.close = async () => {
+    waitShutdown.abort();
+    await close();
+  };
+  const onclose = server.server.onclose;
+  server.server.onclose = () => {
+    waitShutdown.abort();
+    onclose?.();
+  };
+
+  const boundCredential = (allowCursorRecovery = false) => {
+    if (!binding) {
+      throw new CollabError(
+        "session_not_bound",
+        "Start a credential-bound session first or provide legacy actor mode explicitly",
+      );
+    }
+    if (binding.handle.cursor_recovery && !allowCursorRecovery) {
+      throw new CollabError(
+        "cursor_recovery_required",
+        "The host authorized recovery mode; reset to an exact journal anchor before session mutations resume",
+        { ...binding.handle.cursor_recovery },
+      );
+    }
+    return binding.handle.credential;
+  };
+  const requireWorkspace = (id: string) => {
+    if (binding && binding.handle.workspace.id !== id) {
+      throw new CollabError(
+        "session_workspace_mismatch",
+        "The bound session belongs to another workspace",
+      );
+    }
+  };
+  const requireLegacyActor = (value: string | undefined): string => {
+    if (!value) {
+      throw new CollabError(
+        "actor_required",
+        "Legacy mode requires actor; session mode derives it from the bound credential",
+      );
+    }
+    return value;
+  };
+
+  server.registerTool(
+    "collab_session_join",
+    {
+      title: "Join the self-declared presence plane",
+      description:
+        "Create or replay one unauthenticated routing-presence record and return its unique actor_key. This does not bind the MCP process or create a credential.",
+      annotations: localRetrySafeMutation,
+      inputSchema: {
+        workspace_id: workspaceId,
+        client_instance_id: z.string().min(1).max(200)
+          .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+        actor_label: actorLabel,
+        runtime_kind: z.string().min(1).max(64)
+          .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+        provider_label: z.string().min(1).max(100).optional(),
+        model_label: z.string().min(1).max(200).optional(),
+        declared_capabilities: z.array(
+          z.string().min(1).max(100)
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+        ).max(32).optional(),
+        ttl_seconds: presenceTtlSeconds,
+      },
+    },
+    async (input) => call(() => ({ session: store.joinSession(input) })),
+  );
+
+  server.registerTool(
+    "collab_session_list",
+    {
+      title: "List self-declared presence sessions",
+      description:
+        "List recent live, stale, or explicitly left routing hints. Presence is not health, authentication, permission, or credential-bound coordination.",
+      annotations: localReadOnly,
+      inputSchema: {
+        workspace_id: workspaceId,
+        presence: z.enum(["live", "stale", "left"]).optional(),
+        limit: z.number().int().min(1).max(500).optional(),
+      },
+    },
+    async ({ workspace_id, presence, limit }) =>
+      call(() => ({ sessions: store.listSessions(workspace_id, presence, limit) })),
+  );
+
+  server.registerTool(
+    "collab_session_heartbeat",
+    {
+      title: "Refresh a self-declared presence hint",
+      description:
+        "Refresh server-timed routing presence. This never renews or releases a task lease and does not authenticate the caller.",
+      annotations: localRetrySafeMutation,
+      inputSchema: {
+        session_id: sessionId,
+        idempotency_key: key,
+        expected_version: sessionExpectedVersion,
+        ttl_seconds: presenceTtlSeconds,
+      },
+    },
+    async (input) => call(() => ({ session: store.heartbeatSession(input) })),
+  );
+
+  server.registerTool(
+    "collab_session_leave",
+    {
+      title: "Leave the self-declared presence plane",
+      description:
+        "Mark one routing-presence incarnation as left. This does not end a credential-bound session or release its task leases.",
+      annotations: localRetrySafeMutation,
+      inputSchema: {
+        session_id: sessionId,
+        idempotency_key: key,
+        expected_version: sessionExpectedVersion,
+      },
+    },
+    async (input) => call(() => ({ session: store.leaveSession(input) })),
+  );
+
+  server.registerTool(
+    "collab_session_start",
+    {
+      title: "Join an independent local collaboration session",
+      description:
+        "Create and bind a credential-fenced session. The bearer is written to a mode-0600 local file and is never returned in tool output.",
+      annotations: localMutation,
+      inputSchema: {
+        root_path: z.string().min(1),
+        actor: actorLabel,
+        role: z.string().max(200).optional(),
+        parent_session_id: z.string().min(1).optional(),
+        repository_key: z.string().min(1).max(1000).optional(),
+      },
+    },
+    async (input) => call(() => {
+      if (binding) {
+        throw new CollabError(
+          "session_already_bound",
+          "This MCP process already has a bound session",
+          { session_id: binding.handle.session.id },
+        );
+      }
+      const handle = store.startSession(input);
+      const credentialFile = store.defaultSessionCredentialPath(handle.session.id);
+      try {
+        const path = writeSessionCredentialFile(credentialFile, handle.credential);
+        binding = { handle, credential_file: path };
+        return publicSessionBinding(binding);
+      } catch (error) {
+        try {
+          store.endSession({ ...handle.credential, reason: "credential_file_write_failed" });
+        } catch {
+          // Preserve the original exact file-boundary error. The token was
+          // never returned, persisted, or logged.
+        }
+        throw error;
+      }
+    }),
+  );
+
+  server.registerTool(
+    "collab_session_end",
+    {
+      title: "End the bound collaboration session",
+      description:
+        "Fence future session mutations and remove the credential file. Live leases must be resolved first, " +
+        "or pass release_leases: true to release every live lease and recovery-release every expired lease " +
+        "this session holds in the same transaction; incoming offers expire as an audited refusal.",
+      annotations: localDestructiveMutation,
+      inputSchema: {
+        reason: z.string().max(2000).optional(),
+        release_leases: z.boolean().optional()
+          .describe(
+            "Release every lease this session holds before ending: live leases through task release, " +
+              "expired leases through recovery with action release",
+          ),
+        release_summary: z.string().max(2000).optional()
+          .describe(
+            "Release summary and recovery note recorded for each released lease; requires release_leases: true. " +
+              "Defaults to reason",
+          ),
+      },
+    },
+    async ({ reason, release_leases, release_summary }) => call(() => {
+      const current = binding;
+      if (!current) throw new CollabError("session_not_bound", "No session is bound");
+      const ended = store.endSessionWithReleases({
+        ...current.handle.credential,
+        reason,
+        release_leases,
+        release_summary,
+      });
+      binding = null;
+      removeSessionCredentialFile(current.credential_file);
+      return {
+        session: ended.session,
+        released_leases: ended.released_leases,
+        credential_file_removed: true,
+        session_file_name: `${ended.session.id}.json`,
+      };
+    }),
+  );
+
+  server.registerTool(
+    "collab_workspace_open",
+    {
+      title: "Open a local collaboration workspace",
+      description:
+        "Legacy-compatible workspace open. New independent processes should use collab_session_start.",
+      annotations: localRetrySafeMutation,
+      inputSchema: {
+        root_path: z.string().min(1),
+        name: z.string().max(200).optional(),
+        actor: actorLabel,
+        repository_key: z.string().min(1).max(1000).optional(),
+      },
+    },
+    async (input) => call(() => {
+      if (binding) {
+        throw new CollabError(
+          "session_already_bound",
+          "A bound MCP process cannot open or register another workspace",
+          { session_id: binding.handle.session.id },
+        );
+      }
+      return { workspace: store.openWorkspace(input) };
+    }),
+  );
+
+  server.registerTool(
+    "collab_workspace_status",
+    {
+      title: "Read collaboration status",
+      description:
+        "Return task counts, active sessions (with derived liveness) and claims, blockers, pending reviews, reports, and decisions.",
+      annotations: localReadOnly,
+      inputSchema: { workspace_id: workspaceId },
+    },
+    async ({ workspace_id }) => call(() => store.workspaceStatus(workspace_id)),
+  );
+
+  server.registerTool(
+    "collab_next",
+    {
+      title: "Poll the next useful collaboration state",
+      description:
+        "Poll without acknowledging, with 1–50 events per page and a default of 10. Routed reports are bounded to the exact event page; task, conflict, and handoff projections describe the same snapshot head. A bound session always pages from its acknowledged cursor: advance with collab_cursor_ack, or read elsewhere with collab_events_since. " +
+        "recovery_required lists expired session leases awaiting collab_task_recover, the caller's own first. " +
+        "Session liveness and task assignee_liveness are a derived view (stale after 6 hours unseen), never a status change.",
+      annotations: localMutation,
+      inputSchema: {
+        workspace_id: workspaceId,
+        actor: legacyActor,
+        after_sequence: z.number().int().nonnegative().optional()
+          .describe(
+            "Legacy actor mode: page after this sequence. A bound session pages from its acknowledged cursor; " +
+            "any other value is refused with after_sequence_unsupported_in_bound_session.",
+          ),
+        known_cursor: eventAnchor.optional(),
+        event_limit: nextEventLimit,
+      },
+    },
+    async ({ workspace_id, actor, after_sequence, known_cursor, event_limit }) => call(() => {
+      requireWorkspace(workspace_id);
+      return binding
+        ? store.nextForSession({
+          ...boundCredential(),
+          known_cursor,
+          event_limit: event_limit ?? DEFAULT_MCP_NEXT_EVENT_LIMIT,
+          after_sequence,
+        })
+        : store.nextForActor(
+          workspace_id,
+          requireLegacyActor(actor),
+          after_sequence ?? 0,
+          event_limit ?? DEFAULT_MCP_NEXT_EVENT_LIMIT,
+        );
+    }),
+  );
+
+  server.registerTool(
+    "collab_cursor_ack",
+    {
+      title: "Acknowledge processed collaboration events",
+      description:
+        "Monotonically persist an exact epoch/sequence/hash anchor. Acknowledgement records processing, not agreement.",
+      annotations: localRetrySafeMutation,
+      inputSchema: {
+        workspace_id: workspaceId,
+        anchor: eventAnchor,
+        expected_cursor_version: z.number().int().nonnegative(),
+      },
+    },
+    async ({ workspace_id, anchor, expected_cursor_version }) => call(() => {
+      requireWorkspace(workspace_id);
+      const session = store.acknowledgeSessionCursor({
+        ...boundCredential(),
+        anchor,
+        expected_cursor_version,
+      });
+      if (binding) {
+        binding.handle = {
+          ...binding.handle,
+          session,
+          credential: {
+            ...binding.handle.credential,
+            last_cursor: session.cursor,
+          },
+        };
+        writeSessionCredentialFile(
+          binding.credential_file,
+          binding.handle.credential,
+          { replace: true },
+        );
+      }
+      return { session };
+    }),
+  );
+
+  server.registerTool(
+    "collab_cursor_reset",
+    {
+      title: "Deliberately reset a forked or rolled-back session cursor",
+      description:
+        "Append an auditable reset reason and CAS the cursor to an exact valid anchor; ordinary polling never resets automatically.",
+      annotations: localRetrySafeMutation,
+      inputSchema: {
+        workspace_id: workspaceId,
+        idempotency_key: key,
+        target: eventAnchor,
+        expected_cursor_version: z.number().int().nonnegative(),
+        reason: z.string().min(1).max(2000),
+      },
+    },
+    async ({ workspace_id, ...input }) => call(() => {
+      requireWorkspace(workspace_id);
+      const session = store.resetSessionCursor({ ...boundCredential(true), ...input });
+      if (binding) {
+        binding.handle = {
+          ...binding.handle,
+          cursor_recovery: undefined,
+          session,
+          credential: {
+            ...binding.handle.credential,
+            last_cursor: session.cursor,
+          },
+        };
+        writeSessionCredentialFile(
+          binding.credential_file,
+          binding.handle.credential,
+          { replace: true },
+        );
+      }
+      return { session };
+    }),
+  );
+
+  server.registerTool(
+    "collab_task_create",
+    {
+      title: "Create a bounded collaboration task",
+      description:
+        "Create a task with dependencies and path scopes. Bound-session edit tasks require non-empty scopes and default to distinct-session acceptance.",
+      annotations: localRetrySafeMutation,
+      inputSchema: {
+        workspace_id: workspaceId,
+        actor: legacyActor,
+        idempotency_key: key,
+        task_id: z.string().min(1).max(200).optional(),
+        title: z.string().min(1).max(300),
+        description: z.string().max(8000).optional(),
+        dependencies: z.array(z.string().min(1).max(200)).max(128).optional(),
+        path_scopes: z.array(z.string().min(1).max(500)).max(128).optional(),
+        work_mode: z.enum(["coordination", "read_only", "edit"]).optional(),
+        completion_policy: z.enum(["reported", "accepted"]).optional(),
+        expected_base_sha: z.string().regex(/^[a-fA-F0-9]{40,64}$/).optional(),
+      },
+    },
+    async ({ workspace_id, actor, task_id, ...input }) => call(() => {
+      requireWorkspace(workspace_id);
+      if (
+        !binding
+        && (
+          input.work_mode !== undefined
+          || input.completion_policy !== undefined
+          || input.expected_base_sha !== undefined
+        )
+      ) {
+        throw new CollabError(
+          "session_required_for_v2_task_options",
+          "work_mode, completion_policy, and expected_base_sha require a bound v0.2 session",
+        );
+      }
+      const task = binding
+        ? store.createTaskForSession({ ...boundCredential(), ...input, id: task_id })
+        : store.createTask({
+            workspace_id,
+            actor: requireLegacyActor(actor),
+            ...input,
+            id: task_id,
+          });
+      return { task };
+    }),
+  );
+
+  server.registerTool(
+    "collab_task_list",
+    {
+      title: "List workspace tasks",
+      description:
+        "List projections including recovery_required, reported_complete, review state, sessions, worktrees, and checkpoints.",
+      annotations: localReadOnly,
+      inputSchema: {
+        workspace_id: workspaceId,
+        status: z.enum(["open", "claimed", "blocked", "completed"]).optional(),
+      },
+    },
+    async ({ workspace_id, status }) =>
+      call(() => ({ tasks: store.listTasks(workspace_id, status as TaskStatus | undefined) })),
+  );
+
+  server.registerTool(
+    "collab_task_get",
+    {
+      title: "Read one task",
+      description:
+        "Return a task, review/lease/checkpoint state, and artifact references.",
+      annotations: localReadOnly,
+      inputSchema: { workspace_id: workspaceId, task_id: taskId },
+    },
+    async ({ workspace_id, task_id }) => call(() => ({ task: store.getTask(workspace_id, task_id) })),
+  );
+
+  server.registerTool(
+    "collab_task_claim",
+    {
+      title: "Claim a task coordination lease",
+      description:
+        "Atomically claim if accepted dependencies and repository-wide path scopes permit it. Expired session leases require collab_task_recover.",
+      annotations: localRetrySafeMutation,
+      inputSchema: {
+        workspace_id: workspaceId,
+        task_id: taskId,
+        actor: legacyActor,
+        idempotency_key: key,
+        expected_version: expectedVersion,
+        ttl_seconds: ttlSeconds,
+      },
+    },
+    async ({ workspace_id, actor, ...input }) => call(() => {
+      requireWorkspace(workspace_id);
+      const task = binding
+        ? store.claimTaskForSession({ ...boundCredential(), ...input })
+        : store.claimTask({ workspace_id, actor: requireLegacyActor(actor), ...input });
+      return { task };
+    }),
+  );
+
+  server.registerTool(
+    "collab_task_recover",
+    {
+      title: "Explicitly recover an expired session lease",
+      description:
+        "Acknowledge the prior holder/checkpoint and atomically take over after rechecking dependencies and path conflicts; this does not accept prior work.",
+      annotations: localRetrySafeMutation,
+      inputSchema: {
+        workspace_id: workspaceId,
+        task_id: taskId,
+        idempotency_key: key,
+        expected_version: expectedVersion,
+        recovery_note: z.string().min(1).max(4000),
+        action: z.enum(["takeover", "release", "block"]).optional(),
+        blocker: z.string().min(1).max(2000).optional(),
+        ttl_seconds: ttlSeconds,
+      },
+    },
+    async ({ workspace_id, ...input }) => call(() => {
+      requireWorkspace(workspace_id);
+      return {
+        task: store.recoverTaskForSession({ ...boundCredential(), ...input }),
+      };
+    }),
+  );
+
+  server.registerTool(
+    "collab_task_renew",
+    {
+      title: "Renew a live task lease",
+      description: "Extend the current lease; renewal never shortens it.",
+      annotations: localRetrySafeMutation,
+      inputSchema: leaseMutationSchema({ ttl_seconds: ttlSeconds }),
+    },
+    async ({ workspace_id, actor, ...input }) => call(() => {
+      requireWorkspace(workspace_id);
+      const task = binding
+        ? store.renewLeaseForSession({ ...boundCredential(), ...input })
+        : store.renewLease({ workspace_id, actor: requireLegacyActor(actor), ...input });
+      return { task };
+    }),
+  );
+
+  server.registerTool(
+    "collab_task_progress",
+    {
+      title: "Post concise task progress",
+      description:
+        "Record a result-oriented progress note. Use a structured report when evidence, confidence, disagreement, or authority matters.",
+      annotations: localRetrySafeMutation,
+      inputSchema: leaseMutationSchema({ message: z.string().min(1).max(2000) }),
+    },
+    async ({ workspace_id, actor, ...input }) => call(() => {
+      requireWorkspace(workspace_id);
+      const task = binding
+        ? store.progressTaskForSession({ ...boundCredential(), ...input })
+        : store.progressTask({ workspace_id, actor: requireLegacyActor(actor), ...input });
+      return { task };
+    }),
+  );
+
+  server.registerTool(
+    "collab_task_release",
+    {
+      title: "Release a task lease",
+      description:
+        "Return work to the open pool. A session-to-session handoff remains an invitation until accepted.",
+      annotations: localRetrySafeMutation,
+      inputSchema: leaseMutationSchema({ summary: z.string().max(2000).optional() }),
+    },
+    async ({ workspace_id, actor, ...input }) => call(() => {
+      requireWorkspace(workspace_id);
+      const task = binding
+        ? store.releaseTaskForSession({ ...boundCredential(), ...input })
+        : store.releaseTask({ workspace_id, actor: requireLegacyActor(actor), ...input });
+      return { task };
+    }),
+  );
+
+  server.registerTool(
+    "collab_task_block",
+    {
+      title: "Block and release a task",
+      description: "Record a blocker and release the current lease/path scopes.",
+      annotations: localRetrySafeMutation,
+      inputSchema: leaseMutationSchema({ blocker: z.string().min(1).max(2000) }),
+    },
+    async ({ workspace_id, actor, ...input }) => call(() => {
+      requireWorkspace(workspace_id);
+      const task = binding
+        ? store.blockTaskForSession({ ...boundCredential(), ...input })
+        : store.blockTask({ workspace_id, actor: requireLegacyActor(actor), ...input });
+      return { task };
+    }),
+  );
+
+  server.registerTool(
+    "collab_task_unblock",
+    {
+      title: "Unblock a task",
+      description: "Move a blocked task back to the open pool with an optional note.",
+      annotations: localRetrySafeMutation,
+      inputSchema: {
+        workspace_id: workspaceId,
+        task_id: taskId,
+        actor: legacyActor,
+        idempotency_key: key,
+        expected_version: expectedVersion,
+        note: z.string().max(2000).optional(),
+      },
+    },
+    async ({ workspace_id, actor, ...input }) => call(() => {
+      requireWorkspace(workspace_id);
+      const task = binding
+        ? store.unblockTaskForSession({ ...boundCredential(), ...input })
+        : store.unblockTask({ workspace_id, actor: requireLegacyActor(actor), ...input });
+      return { task };
+    }),
+  );
+
+  server.registerTool(
+    "collab_artifact_attach",
+    {
+      title: "Attach an artifact reference",
+      description:
+        "Attach a path, commit, test, data record, or URL reference; bytes remain outside this journal.",
+      annotations: localRetrySafeMutation,
+      inputSchema: leaseMutationSchema({
+        kind: z.enum(["file", "commit", "test", "data", "url", "other"]),
+        uri: z.string().min(1).max(2000),
+        sha256: z.string().length(64).optional(),
+        media_type: z.string().max(200).optional(),
+        label: z.string().max(300).optional(),
+      }),
+    },
+    async ({ workspace_id, actor, ...input }) => call(() => {
+      requireWorkspace(workspace_id);
+      return binding
+        ? store.attachArtifactForSession({ ...boundCredential(), ...input })
+        : store.attachArtifact({ workspace_id, actor: requireLegacyActor(actor), ...input });
+    }),
+  );
+
+  server.registerTool(
+    "collab_task_complete",
+    {
+      title: "Report a claimed task complete",
+      description:
+        "Legacy mode is actor-reported and not review or acceptance. Bound edit tasks produce a structured completion report and remain pending until distinct-session review. Optional review_requested_session_id routes a separate review request to one active session; any distinct session may still review.",
+      annotations: localRetrySafeMutation,
+      inputSchema: leaseMutationSchema({
+        summary: z.string().min(1).max(4000),
+        confidence: z.enum(["high", "medium", "low", "unknown"]).optional(),
+        confidence_basis: z.string().max(2000).optional(),
+        limits: z.string().max(2000).optional(),
+        evidence_refs: evidenceRefs,
+        review_requested_session_id: z.string().min(1).max(200).optional()
+          .describe(
+            "Optional active session in this workspace, other than yours, asked to review this completion through a separate addressed report. A request, not a reservation. Only on a task whose completion waits for acceptance.",
+          ),
+      }),
+    },
+    async ({ workspace_id, actor, ...input }) => call(() => {
+      requireWorkspace(workspace_id);
+      if (!binding && input.review_requested_session_id !== undefined) {
+        throw new CollabError(
+          "session_required_for_review_request",
+          "review_requested_session_id requires a bound v0.2 session",
+        );
+      }
+      const task = binding
+        ? store.completeTaskForSession({ ...boundCredential(), ...input })
+        : store.completeTask({
+            workspace_id,
+            actor: requireLegacyActor(actor),
+            task_id: input.task_id,
+            lease_id: input.lease_id,
+            idempotency_key: input.idempotency_key,
+            expected_version: input.expected_version,
+            summary: input.summary,
+          });
+      return { task };
+    }),
+  );
+
+  server.registerTool(
+    "collab_task_review",
+    {
+      title: "Review reported task completion",
+      description:
+        "A distinct active session accepts or requests changes. Acceptance is local coordination review—not merge, deploy, truth, or external authority.",
+      annotations: localRetrySafeMutation,
+      inputSchema: {
+        workspace_id: workspaceId,
+        task_id: taskId,
+        idempotency_key: key,
+        expected_version: expectedVersion,
+        outcome: z.enum(["accept", "request_changes"]),
+        summary: z.string().min(1).max(4000),
+        evidence_refs: evidenceRefs,
+        confidence: z.enum(["high", "medium", "low", "unknown"]).optional(),
+        confidence_basis: z.string().max(2000).optional(),
+        limits: z.string().max(2000).optional(),
+      },
+    },
+    async ({ workspace_id, ...input }) => call(() => {
+      requireWorkspace(workspace_id);
+      return store.reviewTaskForSession({ ...boundCredential(), ...input });
+    }),
+  );
+
+  server.registerTool(
+    "collab_report_append",
+    {
+      title: "Append a structured collaboration report",
+      description:
+        "Append an observation, inference, proposal, or scoped decision. Reports can challenge claims without holding the task lease.",
+      annotations: localRetrySafeMutation,
+      inputSchema: {
+        workspace_id: workspaceId,
+        idempotency_key: key,
+        task_id: z.string().min(1).optional(),
+        to_session_id: z.string().min(1).optional(),
+        kind: z.enum(["observation", "inference", "proposal", "decision"]),
+        body: z.string().min(1).max(8000),
+        evidence_refs: evidenceRefs,
+        confidence: z.enum(["high", "medium", "low", "unknown"]).optional(),
+        confidence_basis: z.string().max(2000).optional(),
+        limits: z.string().max(2000).optional(),
+        relation: z.enum([
+          "informs",
+          "supports",
+          "challenges",
+          "corrects",
+          "withdraws",
+          "supersedes",
+          "resolves",
+        ]).optional().describe(
+          "informs (the default) targets no report. supports / challenges answer any report; "
+          + "corrects / withdraws / supersedes only your own; resolves only a challenge. "
+          + "To say yes to a proposal, use supports with its target_report_id.",
+        ),
+        target_report_id: z.string().min(1).optional().describe(
+          "The earlier report this one answers. Required for every relation except informs.",
+        ),
+        authority_scope: z.string().max(1000).optional(),
+        authority_basis: z.string().max(2000).optional(),
+      },
+    },
+    async ({ workspace_id, ...input }) => call(() => {
+      requireWorkspace(workspace_id);
+      return {
+        report: store.appendReportForSession({ ...boundCredential(), ...input }),
+      };
+    }),
+  );
+
+  server.registerTool(
+    "collab_report_list",
+    {
+      title: "List structured collaboration reports",
+      description:
+        "Read append-only reports and branching disagreement by event sequence, task, or addressed session.",
+      annotations: localReadOnly,
+      inputSchema: {
+        workspace_id: workspaceId,
+        after_event_sequence: z.number().int().nonnegative().optional(),
+        limit: z.number().int().min(1).max(500).optional(),
+        task_id: z.string().min(1).optional(),
+        to_session_id: z.string().min(1).optional(),
+      },
+    },
+    async ({ workspace_id, ...options }) => call(() => ({
+      reports: store.listReports(workspace_id, options),
+    })),
+  );
+
+  server.registerTool(
+    "collab_decision_record",
+    {
+      title: "Record a collaboration decision",
+      description:
+        "Legacy-compatible decision record. In a bound session this becomes a structured decision report requiring explicit authority scope and basis.",
+      annotations: localRetrySafeMutation,
+      inputSchema: {
+        workspace_id: workspaceId,
+        actor: legacyActor,
+        idempotency_key: key,
+        topic: z.string().min(1).max(500),
+        decision: z.string().min(1).max(4000),
+        rationale: z.string().max(4000).optional(),
+        authority_scope: z.string().max(1000).optional(),
+        authority_basis: z.string().max(2000).optional(),
+      },
+    },
+    async ({ workspace_id, actor, authority_scope, authority_basis, ...input }) => call(() => {
+      requireWorkspace(workspace_id);
+      if (binding) {
+        return {
+          report: store.appendReportForSession({
+            ...boundCredential(),
+            idempotency_key: input.idempotency_key,
+            kind: "decision",
+            body: `${input.topic}: ${input.decision}${input.rationale ? `\nRationale: ${input.rationale}` : ""}`,
+            confidence: "unknown",
+            authority_scope,
+            authority_basis,
+          }),
+        };
+      }
+      return {
+        decision: store.recordDecision({
+          workspace_id,
+          actor: requireLegacyActor(actor),
+          ...input,
+        }),
+      };
+    }),
+  );
+
+  server.registerTool(
+    "collab_handoff_offer",
+    {
+      title: "Offer a task handoff",
+      description:
+        "Invite another actor/session. The current holder keeps the coordination lease until explicit acceptance.",
+      annotations: localRetrySafeMutation,
+      inputSchema: leaseMutationSchema({
+        to_actor: z.string().min(1).max(200).optional(),
+        to_session_id: z.string().min(1).optional(),
+        summary: z.string().min(1).max(4000),
+        ttl_seconds: ttlSeconds,
+      }),
+    },
+    async ({ workspace_id, actor, to_actor, to_session_id, ...input }) => call(() => {
+      requireWorkspace(workspace_id);
+      return binding
+        ? store.offerHandoffForSession({
+            ...boundCredential(),
+            ...input,
+            to_session_id: requiredString(to_session_id, "to_session_id"),
+          })
+        : store.offerHandoff({
+            workspace_id,
+            actor: requireLegacyActor(actor),
+            ...input,
+            to_actor: requiredString(to_actor, "to_actor"),
+          });
+    }),
+  );
+
+  server.registerTool(
+    "collab_handoff_respond",
+    {
+      title: "Accept or decline a handoff",
+      description:
+        "Only the named actor/session may respond; acceptance atomically transfers the advisory lease.",
+      annotations: localRetrySafeMutation,
+      inputSchema: {
+        workspace_id: workspaceId,
+        handoff_id: z.string().min(1),
+        actor: legacyActor,
+        idempotency_key: key,
+        expected_version: expectedVersion,
+        response: z.enum(["accept", "decline"]),
+        ttl_seconds: ttlSeconds,
+      },
+    },
+    async ({ workspace_id, actor, ...input }) => call(() => {
+      requireWorkspace(workspace_id);
+      return binding
+        ? store.respondHandoffForSession({ ...boundCredential(), ...input })
+        : store.respondHandoff({
+            workspace_id,
+            actor: requireLegacyActor(actor),
+            ...input,
+          });
+    }),
+  );
+
+  server.registerTool(
+    "collab_events_since",
+    {
+      title: "Read the append-only event journal",
+      description:
+        "Read after an exact hash anchor or legacy integer cursor and verify the returned page. Reading never acknowledges.",
+      annotations: localReadOnly,
+      inputSchema: {
+        workspace_id: workspaceId,
+        after_sequence: z.number().int().nonnegative().optional(),
+        after_anchor: eventAnchor.optional(),
+        limit: z.number().int().min(1).max(500).optional(),
+      },
+    },
+    async ({ workspace_id, after_sequence, after_anchor, limit }) => call(() => {
+      if (after_anchor && after_sequence !== undefined) {
+        throw new CollabError(
+          "ambiguous_cursor",
+          "Provide after_anchor or after_sequence, not both",
+        );
+      }
+      return after_anchor
+        ? store.eventsAfterAnchor(workspace_id, after_anchor as EventCursor, limit ?? 100)
+        : store.eventsSince(workspace_id, after_sequence ?? 0, limit ?? 100);
+    }),
+  );
+
+  server.registerTool(
+    "collab_events_wait",
+    {
+      title: "Wait for an exact anchored local event page",
+      description:
+        "Credential-bound, read-only observation. Default 10 events, maximum 50; wait at most 30 seconds. " +
+        "Continue from next_anchor, not the head. No acknowledgement, last_seen/presence writes, lease renewal, or handoff expiry. " +
+        "Presence-only and sidecar changes are not journal events. Stops on corruption, cursor rollback/fork, fencing or recovery required. " +
+        "Page JSON is capped at 256 KiB and the MCP result at 1 MiB; an oversized first event is an explicit error, never skipped.",
+      annotations: localReadOnly,
+      inputSchema: {
+        workspace_id: workspaceId,
+        after_anchor: eventAnchor,
+        event_limit: z.number().int().min(1).max(MAX_WAIT_EVENT_LIMIT).optional(),
+        wait_ms: z.number().int().min(0).max(MAX_WAIT_MS).optional()
+          .describe("Maximum idle wait; default 30000 ms, zero reads immediately"),
+      },
+    },
+    async ({ workspace_id, after_anchor, event_limit, wait_ms }, ctx) => {
+      let counted = false;
+      try {
+        requireWorkspace(workspace_id);
+        const credential = { ...boundCredential() };
+        const input = {
+          ...credential, workspace_id,
+          after_anchor: { ...after_anchor },
+          event_limit: event_limit ?? DEFAULT_WAIT_EVENT_LIMIT,
+        };
+        const duration = wait_ms ?? MAX_WAIT_MS;
+        if (!Number.isInteger(duration) || duration < 0 || duration > MAX_WAIT_MS) {
+          throw new CollabError("invalid_wait_ms", "wait_ms must be an integer from 0 to 30000");
+        }
+        if (activeWaits >= 8) throw new CollabError("too_many_waits", "At most eight waits may run per endpoint");
+        activeWaits += 1;
+        counted = true;
+        const signal = ctx.mcpReq?.signal;
+        const check = () => {
+          if (waitShutdown.signal.aborted) throw new CollabError("server_closed", "The MCP endpoint is closed");
+          if (signal?.aborted) throw new CollabError("wait_cancelled", "The event wait was cancelled");
+          const current = boundCredential();
+          if (current.session_id !== credential.session_id || current.generation !== credential.generation) {
+            throw new CollabError("session_auth_failed", "The bound session changed during the wait");
+          }
+          // Another request may explicitly acknowledge while this wait sleeps.
+          // Carry that latest host anchor into every new authenticated snapshot.
+          input.last_cursor = current.last_cursor ? { ...current.last_cursor } : undefined;
+          requireWorkspace(workspace_id);
+        };
+        const deadline = performance.now() + duration;
+        while (true) {
+          check();
+          try {
+            // Authentication, recovery and anchor checks and paging share ONE short
+            // deferred snapshot on a zero-busy-timeout reader. Never collab_next.
+            const page = store.eventsAfterAnchorForSession(input);
+            check();
+            if (page.events.length || performance.now() >= deadline) {
+              const result = {
+                content: [{ type: "text" as const, text: JSON.stringify(page) }],
+                structuredContent: { ...page },
+              };
+              if (Buffer.byteLength(JSON.stringify(result)) > MAX_WAIT_RESPONSE_BYTES) {
+                throw new CollabError("event_page_too_large", "The MCP result exceeds its byte limit");
+              }
+              check();
+              return result;
+            }
+          } catch (error) {
+            if (!(error instanceof CollabError) || error.code !== "event_read_busy" || performance.now() >= deadline) throw error;
+          }
+          await waitDelay(Math.min(100, Math.max(0, deadline - performance.now())), [signal, waitShutdown.signal]);
+        }
+      } catch (error) {
+        const result = failure(error);
+        if (Buffer.byteLength(JSON.stringify(result)) > MAX_WAIT_RESPONSE_BYTES) {
+          return failure(new CollabError("event_page_too_large", "The MCP error result exceeds its byte limit"));
+        }
+        return result;
+      } finally {
+        if (counted) activeWaits -= 1;
+      }
+    },
+  );
+
+  server.registerTool(
+    "collab_journal_verify",
+    {
+      title: "Verify the full local event journal",
+      description:
+        "Recompute the mixed-version hash chain. Integrity detects edits; it does not prove recorded claims true.",
+      annotations: localReadOnly,
+      inputSchema: { workspace_id: workspaceId },
+    },
+    async ({ workspace_id }) => call(() => ({
+      workspace_id,
+      chain_valid: store.verifyJournal(workspace_id),
+      verification_scope: "full_journal" as const,
+    })),
+  );
+
+  server.registerTool(
+    "collab_anchor_status",
+    {
+      title: "Report the journal's zerone anchor status",
+      description:
+        "Compare the journal head against the local sidecar anchor ledger written by the"
+        + " @agenttool/collab-zerone bridge, which witnesses head hashes on the zerone chain."
+        + " Local file read only — never contacts a chain. The host selects the path; the MCP caller"
+        + " cannot choose or discover it. A missing bridge simply reports unanchored."
+        + " States: unanchored, anchor_pending, anchored, anchor_stale, anchor_conflict.",
+      annotations: localReadOnly,
+      inputSchema: { workspace_id: workspaceId },
+    },
+    async ({ workspace_id }) => call(() =>
+      anchorStatusForWorkspace(store, workspace_id)),
+  );
+
+  return server;
+}
+
+function waitDelay(ms: number, signals: Array<AbortSignal | undefined>): Promise<void> {
+  return new Promise(resolve => {
+    const finish = () => {
+      clearTimeout(timer);
+      for (const signal of signals) signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    for (const signal of signals) signal?.addEventListener("abort", finish, { once: true });
+    if (signals.some(signal => signal?.aborted)) finish();
+  });
+}
+
+function leaseMutationSchema<T extends z.ZodRawShape>(extra: T) {
+  return {
+    workspace_id: workspaceId,
+    task_id: taskId,
+    lease_id: leaseId,
+    actor: legacyActor,
+    idempotency_key: key,
+    expected_version: expectedVersion,
+    ...extra,
+  };
+}
+
+function publicSessionBinding(binding: BoundSession) {
+  return {
+    workspace: binding.handle.workspace,
+    worktree: binding.handle.worktree,
+    session: binding.handle.session,
+    credential_file_created: true,
+    resume_environment_variable: "AGENTOOL_COLLAB_SESSION_FILE",
+    session_file_name: `${binding.handle.session.id}.json`,
+    identity_boundary: binding.handle.identity_boundary,
+    credential_boundary:
+      "credential_file_is_a_local_bearer_secret_never_return_its_contents_to_a_model_or_commit_it",
+  };
+}
+
+function requiredString(value: string | undefined, field: string): string {
+  if (!value) throw new CollabError(`invalid_${field}`, `${field} is required in this mode`);
+  return value;
+}
+
+function success(payload: unknown) {
+  const structured = isRecord(payload) ? payload : { result: payload };
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(structured, null, 2) }],
+    structuredContent: structured,
+  };
+}
+
+function failure(error: unknown) {
+  const payload = error instanceof CollabError
+    ? { error: error.code, message: error.message, ...error.details }
+    : { error: "internal_error", message: error instanceof Error ? error.message : String(error) };
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+    structuredContent: payload,
+    isError: true,
+  };
+}
+
+async function call<T>(operation: () => T | Promise<T>) {
+  try {
+    return success(await operation());
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}

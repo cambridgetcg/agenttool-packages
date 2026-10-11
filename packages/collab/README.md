@@ -1,0 +1,689 @@
+# @agenttool/collab
+
+> **Compass:** [Collaboration channels](../../docs/COLLABORATION-CHANNELS.md).
+> **Implements:** Local observation and coordination, not host lifecycle or remote delivery.
+> **Code:** `src/{store,mcp,protocol}.ts`.
+> **Tests:** `tests/{events-wait,mcp,package}.test.ts`.
+
+**RELEASE CANDIDATE: 0.5.0, 33 MCP tools.** Public 0.4.0 remains
+the unchanged 32-tool witness-awareness release; installing it does not supply
+`collab_events_wait`. This preparation is not evidence of 0.5.0 publication or
+native-harness activation; verify exact release receipts separately.
+
+Local-first coordination for independent coding-agent sessions. It gives
+Codex, Claude Code, Hermes Agent, and other local MCP clients one SQLite-backed
+repository workspace with two explicit planes: self-declared presence for
+routing hints, and credential-bound sessions for resumable coordination,
+transactional task leases, linked Git worktree awareness, path-conflict
+projection, structured reports, reviewed edit completion, refusable handoffs,
+Git checkpoints, and a hash-chained event journal. Its 32nd local MCP tool is
+a read-only view of an optional Zerone witness sidecar, so a participant can
+distinguish an unwitnessed, pending, current, stale, or conflicting journal
+without contacting a chain.
+
+It does **not** spawn, steer, wake, or stop agents; lock files; authenticate the
+local user; grant external authority; or create a channel hidden from a remote
+model provider. The host owns agent lifecycle and polling. Claims are advisory,
+session and actor identifiers are coordination labels, and MCP arguments and
+results remain visible to whichever provider runs the calling agent.
+
+## Run
+
+```bash
+bun install
+bun run ci
+# Source-tree development entry point:
+bun bin/agenttool-collab-mcp.ts
+# Rebuild the dependency-complete plugin/CLI executable:
+bun run build:mcp
+```
+
+The installed `agenttool-collab-mcp` command and both bundled plugin manifests
+run `dist/agenttool-collab-mcp.js`. It is a Bun-targeted standalone JavaScript
+bundle, so plugin hosts do not need to install its JavaScript dependencies. It
+still requires Bun 1.3 or newer on `PATH`.
+
+The default database is `~/.local/share/agenttool/collab.sqlite`. Set
+`AGENTOOL_COLLAB_DB` in each host's scoped MCP environment to select another
+journal. Every collaborating process must resolve to the same database file.
+The package does not replicate journals between machines.
+
+A dedicated state directory created by this package uses `0700`; it never
+changes the mode of an existing caller-owned parent directory. The SQLite
+database plus WAL/SHM files are tightened to `0600`. They remain unencrypted
+plaintext, and this version has no selective redaction, retention, or secure
+deletion command.
+
+## Repository workspaces and sessions
+
+For a Git repository, Collab derives repository identity from the resolved Git
+common directory. Fresh v0.3 linked worktrees therefore join one logical
+workspace even though each has a different root path. Each root is also
+registered as a separate worktree so a claim or checkpoint records where it
+originated.
+Different clones do not automatically share an identity. A non-Git directory
+falls back to its resolved local path. An explicitly supplied repository key
+can override discovery, but it is a routing key, not proof that two roots are
+equivalent or safe to combine.
+
+Collab asks local Git only for repository identity, `HEAD`, branch, and coarse
+status. It does not itself fetch, inspect remotes, contact a forge, or request
+credential values. Repository-specific Git configuration or hooks remain part
+of the caller's local Git boundary.
+
+### Two session planes
+
+The public presence plane remains available through `collab_session_join`,
+`collab_session_list`, `collab_session_heartbeat`, and
+`collab_session_leave`. These tools record caller-supplied labels,
+capabilities, and a server-timed live/stale/left routing hint. They do not issue
+or validate a credential, bind the MCP process, prove that an agent is healthy,
+authenticate a person/model/provider/account, renew a task lease, or grant
+permission. A presence leave does not end a credential-bound session or
+release its work. For presence-only compatibility, open the workspace first
+with `collab_workspace_open`, join with a fresh `client_instance_id`, and use
+the returned `actor_key` only where a legacy actor-labelled tool requires it.
+
+The credential-bound coordination plane starts with
+`collab_session_start`. Use a distinct coordination session for each independent
+agent process or host conversation, even when the human-facing actor label is
+the same. Starting opens the repository workspace, generates a session bearer,
+writes it to a mode-`0600` file, and binds the current MCP server. The
+model-facing result confirms creation and returns the session ID, never the
+token or absolute credential-file path. The journal stores only a token hash.
+The host can derive the default file as
+`<database-directory>/collab-sessions/<session-id>.json`.
+
+The planes may be used together but are not linked identities: matching labels
+or one shared workspace do not make a presence record the credential-bound
+session. Use presence only for optional discovery and routing. Use the bound
+session for persisted cursors, reports, task review, recovery, and attribution
+fenced by the local bearer.
+
+Treat that credential file as a local bearer secret. Never read it with a
+model-facing tool or copy its contents into a prompt, chat, log, report,
+artifact, or source-controlled file. Keep its path in host configuration only.
+Possession
+authenticates only the cooperative session protocol, not an OS-user identity,
+human identity, or external account. Any process that can read the file can act
+as that session.
+
+The session's part of the ordinary loop (below) is:
+
+1. Call `collab_session_start` with the repository root. It opens the workspace
+   and binds the new session; do not open its credential file.
+2. Poll with `collab_next` from the session's persisted cursor. Its optional
+   `event_limit` accepts an integer from 1 through 50; omission uses the
+   context-bounded MCP default of 10. A bound session does not take
+   `after_sequence`: a value other than the acknowledged cursor's sequence is
+   refused with `after_sequence_unsupported_in_bound_session`. Advance with
+   `collab_cursor_ack`, or read from any position without acknowledging
+   through `collab_events_since`.
+3. Process that page, then call `collab_cursor_ack` with its exact
+   `next_anchor` (`{ epoch_id, sequence, hash }`).
+4. If `has_more` is true, poll again from the now-persisted cursor. A supplied
+   `known_cursor` validates an anchor but does not select or acknowledge the
+   next page.
+5. Poll again after local work, before a mutation based on shared state, and
+   whenever the host wakes the agent.
+6. End deliberately with `collab_session_end` when the host knows the session
+   will not resume. Pass `release_leases: true` and an optional
+   `release_summary` to release every lease the session still holds in the
+   same transaction. Without the flag, ending refuses while the session owns a
+   live task lease and `session_has_active_leases` lists `task_ids` and
+   `leases`. Pending offers addressed to the ending session expire with an
+   auditable `target_session_ended` reason.
+
+Acknowledgement means “this session processed through this journal position.”
+It does not mean agreement, acceptance, consent, or correctness. A stale epoch
+or hash is rejected instead of silently advancing the cursor. Use
+`collab_cursor_reset` only for a deliberate replay or recovery, then reconcile
+the replayed events before acknowledging again.
+
+`collab_next` returns its event page and routed reports from one SQLite read
+snapshot. `reports` is bounded to that exact page; follow `has_more` instead of
+assuming a later report has already been delivered. Task, conflict, and
+handoff projections are labelled `snapshot_head` because they describe that
+snapshot's current head state and may reflect changes whose events appear on a
+later page. `event_limit` bounds only the event page and its routed reports; it
+does not truncate those snapshot-head projections. Direct
+`CollabStore.nextForActor` and `CollabStore.nextForSession` calls retain their
+50-event default for source-API compatibility.
+
+Resume is a host-startup operation, not a model tool. Start the replacement MCP
+server with `AGENTOOL_COLLAB_SESSION_FILE` set to the credential-file path. The
+server validates the stable token, increments the session generation, and
+atomically rewrites the same mode-`0600` file. Mutations from the previous
+generation are then fenced. A second process that possesses a copied token can
+resume again and supersede the first process; this is cooperative local
+session fencing, not host authentication. Environment values and file paths
+may still be visible to the host; this mechanism keeps the token out of normal
+MCP tool results, not out of the local host.
+
+If the host credential cursor and database cursor disagree, normal startup
+fails with `cursor_reset_required` and does not discard either anchor. After
+the host operator confirms that recovery is intentional, start once with
+`AGENTOOL_COLLAB_ALLOW_CURSOR_RECOVERY=1` as well as the session-file variable.
+That process is recovery-fenced: ordinary session mutations remain disabled
+until `collab_cursor_reset` records a reason and an exact valid target anchor.
+The credential file retains the host anchor until that audited reset succeeds.
+Do not enable recovery as a permanent default.
+
+The MCP server is request-driven. It does not push an interrupt into Codex,
+Claude Code, Hermes or OpenClaw, keep a disconnected process alive, or schedule
+polling. A host can explicitly wait while running; waking a suspended agent
+remains host-owned. Tool arrival proves neither that a model read feedback nor
+that it agreed, consented, or acted.
+
+### Bounded anchored waiting (0.5.0)
+
+Use `collab_events_wait` with the bound `workspace_id` and an exact
+`after_anchor: { epoch_id, sequence, hash }` from a prior page or the session's
+cursor. `event_limit` defaults to 10 and accepts 1–50. `wait_ms` defaults to
+30,000, accepts 0–30,000, and zero reads immediately. The result is a
+`JournalPage` in `structuredContent` and matching compact JSON text, without
+`collab_next`'s task/report projections. Existing events return immediately;
+an idle timeout returns a verified empty page, not an invented timeout event.
+
+Continue from **`next_anchor`, never the later head**. Follow `has_more` with
+another bounded call. Keep this observation position separate from the
+session's processing cursor: only explicit `collab_cursor_ack` acknowledges
+processed events. A courier must use its own session and durable delivery
+cursor, never acknowledge a harness session on transport receipt.
+
+Each poll authenticates the session, checks recovery and host/stored cursor
+anchors, and reads/verifies the page in one short deferred SQLite snapshot.
+A second short snapshot rechecks the session/cursors and observed head before
+return. The dedicated read-only connection uses zero busy timeout; no
+transaction remains open during the at-most-100-ms polling delay. Session end,
+resume-generation fencing, cursor recovery, rollback, fork, or invalid returned
+page fails explicitly. Verification covers the returned page and selected
+anchors, not unreturned history; use `collab_journal_verify` for a full audit.
+
+The page is capped at 256 KiB of UTF-8 JSON and the complete MCP tool result at
+1 MiB, including both text and structured content. A page may contain fewer
+than `event_limit` events. An oversized first event returns `event_too_large`
+without advancing or skipping it; stop and select a separately authorized
+larger-read workflow such as `collab_events_since`, whose output is not covered
+by these wait caps. Do not reset or acknowledge past it just to clear the error.
+After actually reading and processing it, an explicit acknowledgement can resume
+waiting: persisted, host, and observation anchors have a separate **8 MiB per
+anchor** validation ceiling on stored UTF-8 payload plus text metadata. SQLite
+checks that size before loading the row; normal canonical JSON digest, epoch,
+and cursor checks still apply. This is not an 8 MiB response or heap-memory cap.
+An anchor above that ceiling fails explicitly with `event_anchor_too_large`,
+even after a larger read and acknowledgement. Such synthetic/legacy data needs
+operator reconciliation outside bounded waiting; never bypass verification,
+auto-reset, or skip to a later anchor merely to silence the error.
+
+MCP request cancellation and endpoint close interrupt waits and release timer
+listeners. The bundled stdio entrypoint also shuts down on actual stdin EOF or
+close, aborting pending waits and closing SQLite rather than waiting 30 seconds.
+At most eight waits may be outstanding per endpoint. A read lock is
+retried only within the requested deadline; a still-busy journal returns
+`event_read_busy`, never a false empty success. The 30-second setting bounds
+idle waiting, not an OS-level hard real-time guarantee for bounded synchronous
+SQLite reads. Closing the store also closes its dedicated reader.
+
+Waiting does **not** write `last_seen`, refresh presence, expire handoffs, renew
+leases, acknowledge a cursor, or generate journal/heartbeat noise. Presence TTL
+and witness sidecar changes are separate observations: inspect
+`collab_session_list` or `collab_anchor_status` explicitly rather than expecting
+an event wake. No observation authorizes task execution, a channel send, or a
+chain transaction.
+
+Direct Bun callers can use `CollabStore.eventsAfterAnchorForSession` with
+host-held `{ session_id, session_token, generation, last_cursor?, workspace_id,
+after_anchor, event_limit? }` for one immediate page. Keep the bearer outside
+model-facing inputs. It uses the same count/byte bounds and performs no wait.
+
+## The ordinary loop
+
+Most sessions need only this loop. Each step names the tool and the field that
+carries the next step.
+
+1. **Start.** `collab_session_start` with `root_path`, an `actor` label, an
+   optional free-text `role`, and, for a delegated child, `parent_session_id`.
+2. **Poll and acknowledge.** `collab_next`, process the page, then
+   `collab_cursor_ack` with its `next_anchor`. Reconcile new reports, reviews,
+   handoffs, and lease changes; query history with `collab_report_list` when
+   needed. Handle your own entries in `recovery_required` first.
+3. **Split and claim.** Create bounded tasks with `collab_task_create`,
+   dependencies, completion tests, and a work mode: `coordination`,
+   `read_only`, or `edit`. Give edit tasks conservative repository-relative
+   path scopes; new edit tasks require a non-empty scope and default to
+   reviewed completion. Inspect both claimable and conflicted work:
+   “claimable” accounts for active path leases, merely open or
+   dependency-ready does not. Claim with `collab_task_claim` and the version
+   just read, and begin edits only after the claim succeeds.
+4. **Work.** Renew with `collab_task_renew` before a long task exceeds its
+   lease and record compact `collab_task_progress`.
+5. **Attach.** `collab_artifact_attach` each file, commit, test, data, or URL
+   reference rather than raw output. A file artifact uses a
+   repository-relative `uri` inside the task's path scopes and the `sha256` of
+   the bytes written.
+6. **Complete.** `collab_task_complete` with a summary, `confidence`,
+   `confidence_basis`, `limits`, and `evidence_refs`, optionally naming
+   `review_requested_session_id`. The server records the result checkpoint. An
+   edit task remains `reported_complete` until a distinct session accepts it.
+7. **Review.** Another session inspects the evidence and calls
+   `collab_task_review` with `accept` or `request_changes`, a summary, and its
+   own `confidence`, `confidence_basis`, and `limits`. A late reviewer concurs
+   or disagrees by report.
+8. **End.** `collab_session_end` with a `reason`, `release_leases: true`, and
+   an optional `release_summary`.
+
+Dependencies do not unlock from a pending reviewed completion. Legacy tasks and
+tasks with a `reported` completion policy still complete on the worker's
+report. Acceptance is a coordination decision only: it does not grant merge,
+commit, publication, deployment, purchase, messaging, or other external
+authority.
+
+Every task mutation uses optimistic `expected_version` checks and a scoped
+idempotency key. Reuse an idempotency key only for an exact retry. SQLite
+`BEGIN IMMEDIATE` transactions make one claim win under local contention.
+
+### Evidence references
+
+Evidence references point inside the workspace journal and use one of four
+prefixes: `artifact:` (for example `artifact:artifact_<id>` from
+`collab_artifact_attach`), `event:`, `report:`, or `checkpoint:` followed by a
+task's `base_checkpoint_digest` or `result_checkpoint_digest`. Each
+`evidence_refs` schema describes them. `invalid_evidence_ref` and
+`evidence_not_found` errors carry an `allowed_prefixes` field; send the
+corrected mutation with a fresh idempotency key rather than dropping the
+evidence. Attach a path, commit, or URL before citing it.
+
+### Requesting and giving review
+
+`collab_task_complete` accepts an optional `review_requested_session_id`: an
+active session in the same workspace other than the reporter. The completion
+report stays unaddressed, so every session still sees it; the request is stored
+in the `task.reported_complete` event, projected on the task, and announced by
+a separate `informs` report addressed to the requested session. It is a
+request, not a reservation: any distinct session may still review, and others
+should leave it to the requested reviewer while that session's `liveness` is
+`live`. The server refuses a request that names the reporter
+(`review_request_self`), a session that is not active in this workspace
+(`review_requested_session_unavailable`), or a task that completes on report
+(`review_request_not_applicable`).
+
+`collab_task_review` accepts optional `confidence`
+(`high|medium|low|unknown`), `confidence_basis`, and `limits`; the generated
+review report stores them and otherwise keeps `unknown` and null. When the task
+was already accepted, a distinct session's review returns
+`task_not_pending_review` with `review_report_id`, `accepted_by_session_id`,
+and a `remedy`, even if its version is stale. Concur or disagree with
+`collab_report_append` using the same `task_id`, `relation: "supports"` or
+`"challenges"`, and `target_report_id` set to `review_report_id`. Neither the
+reporter nor the session that accepted the task receives that remedy; both get
+only `review_status`, and `self_review_forbidden` still applies.
+
+### Ending cleanly
+
+`collab_session_end` accepts optional `release_leases: true` and
+`release_summary`. In one transaction it releases each live lease the session
+holds through the ordinary release path and each expired lease it still holds
+through the audited recovery path (action `release`, with `release_summary`,
+or else `reason`, as the note), then ends the session; the result lists them
+in `released_leases`. A `release_summary` without `release_leases: true` is
+refused with `invalid_release_summary`. Without the flag,
+`session_has_active_leases` lists `task_ids`, `leases` (`task_id`,
+`lease_id`, `expires_at`), and a `remedy` naming `release_leases`. Ending
+stays available while cursor recovery is required.
+
+The host-side `agenttool-collab-host` command ends a session whose process is
+gone:
+
+```bash
+agenttool-collab-host end --session-file <path> --reason <text> [--release-leases] [--db <path>]
+```
+
+It resumes the session host-side (tolerating a stale generation or cursor),
+performs the same end, removes the credential file, and prints one JSON line
+without the credential: exit 0 with `status` `ended` or `already_ended`, or
+exit 1 with `status: "error"`, an `error` code, and a `message`. With
+`--release-leases`, `--reason` is also the release note. Without it, a session
+that holds a live lease is refused with `session_has_active_leases` before
+anything is resumed. An `ended` receipt carrying
+`warning: "session_file_remove_failed"` means the session ended but the
+credential file stayed; remove it by hand. `--db` defaults to the database the
+MCP server would use, and the CLI never creates one (`journal_not_found`). It
+is not an MCP tool.
+
+### Delegation and lineage
+
+A delegated agent is an independent process with its own session. The
+delegator shares its session ID and keeps its credential to itself:
+never pass your session file, its path, or `AGENTOOL_COLLAB_SESSION_FILE`,
+because resuming it would advance the generation fence and fence the
+delegator. The child calls `collab_session_start` with `parent_session_id` set
+to the delegator's session and an actor label that names its runtime and job.
+`parent_session_id` is declared lineage: the server checks only that the
+parent exists in the same workspace. It is unauthenticated and shares no
+authority, lease, or cursor. Parent and child are distinct sessions and may
+review each other's work; say so in `limits`, because lineage does not make a
+review independent.
+
+### A host that cannot commit
+
+A host that can write files but not `.git` delivers by artifact; integration
+commits. It writes only inside the claimed path scopes, attaches each file
+with its repository-relative `uri` and `sha256`, and completes with those
+`artifact:` references. A separate integrator commits only when every
+working-tree file still matches its artifact digest, and reports a mismatch
+instead of committing.
+
+A distinct reviewer then accepts as usual. If `HEAD` has moved since the
+result checkpoint, the server inspects Git itself. It accepts only when `HEAD`
+is exactly one commit on the result checkpoint's branch whose only parent is
+the result checkpoint's `HEAD`, the worktree is clean, and every path that
+commit changes lies inside the task's `path_scopes` and is byte-equal to the
+newest `file` artifact the task attached for that `uri`. The `task.accepted`
+event then records `checkpoint_basis: "host_commit_successor"`,
+`host_commit_sha`, and `host_commit_artifact_ids`. Any other drift is refused
+with `git_checkpoint_stale`: `host_commit_refusal` says why, and `remedy` names
+both ways forward, such as a host commit or `request_changes` followed by a fresh
+completion.
+Only artifacts attached since the task's latest `request_changes` vouch for a
+host commit. Never amend, reset or rewrite a shared branch to meet that
+condition; if other commits already sit on it, use `request_changes`.
+
+### Roles and liveness
+
+`role` is free text. A session that only listens or reviews says so there, and
+others avoid offering it handoffs or review requests it declines.
+Coordination-session projections carry a derived `liveness`: `stale` once the
+session has ended or when `last_seen_at` is more than 6 hours old, otherwise
+`live`. Task projections carry `assignee_liveness` (null without an assignee),
+and `collab_next` adds `recovery_required` (the caller's own expired leases
+first). Every cursor acknowledgement refreshes `last_seen_at`, including one
+that does not advance the cursor; so do `collab_next`, session mutations, a
+cursor reset, resume, and end. A host that only uses `collab_events_wait` for
+over 6 hours reads as stale. This is a view: no status changes and nothing
+expires automatically.
+`role` is fixed for the session's lifetime; correct it with an `informs`
+report, or end the session and start a new one.
+
+### Conflict and lease boundary
+
+Path claims are advisory across all registered worktrees in the repository
+workspace. Comparison is lexical, segment-aware, and conservatively
+case-insensitive. It does not lock the filesystem, inspect uncommitted diffs,
+resolve every symlink or case alias, prevent direct edits, or arbitrate a
+process using another database.
+
+When a session lease expires, the task reads as `recovery_required`. Before taking
+it over, inspect its progress, reports, artifacts, and last checkpoint. Call
+`collab_task_recover` explicitly with the chosen takeover, release, or block
+action and a concise recovery note explaining what was checked and how useful
+prior work will be preserved. The journal records expiration and recovery
+separately. Expiry does not imply that the prior agent's work is invalid or
+disposable.
+
+### Git checkpoints
+
+A checkpoint records the local worktree ID, `HEAD` SHA, branch, a coarse dirty
+flag, capture time, and hashes of the Git index plus the tracked binary diff
+and status-path stream. It also hashes the contents and executable bit of
+non-ignored untracked regular files, plus non-ignored untracked symlink
+targets. Only aggregate digests are journaled; filenames, targets, file
+contents, and diff bytes are not. A task may also require an exact base SHA
+before claim. Use these fields to notice worktree drift between claim,
+completion, and review.
+
+A checkpoint is not a commit signature, merge-base analysis, task-scoped diff,
+test result, clean-tree guarantee, attribution proof, or lock. The state digest
+excludes ignored files. Untracked hashing is bounded to 10,000 paths, 64 MiB,
+and two seconds, and Git command output is separately bounded; exceeding a
+bound leaves the digest unavailable and reviewed acceptance fails closed with
+`git_checkpoint_incomplete`. A clean or matching result does not prove task
+correctness. Git may also change between observation and the SQLite commit.
+Re-read Git and run the task's checks before accepting important edit work.
+
+## Reports, relations, and handoff
+
+Use `collab_report_append` to post structured reports independently of a task
+lease. Classify the body as an `observation`, `inference`, `proposal`, or
+`decision`; add evidence references, claim-specific confidence and basis, and
+material limits. A decision also needs an authority scope and basis.
+
+| Relation | `target_report_id` | Who may append | Use it to |
+|---|---|---|---|
+| `informs` | must be omitted | any session | add a new observation, inference, proposal, decision or request |
+| `supports` | required | any session | agree with a report: answer a proposal, concur with a review |
+| `challenges` | required | any session | disagree with evidence; on a completion report it blocks acceptance |
+| `resolves` | required; must be a `challenges` report | any session | close a challenge with the evidence that settles it |
+| `corrects` | required | only the target's author session | repair your own earlier report |
+| `withdraws` | required | only the target's author session | retract your own earlier report |
+| `supersedes` | required | only the target's author session | replace your own earlier report |
+
+A related report must share its target's workspace and task scope (the same
+`task_id`, or none for a workspace-level target), or the server returns
+`report_task_mismatch`. A missing target returns `report_target_required`;
+another session's attempt to correct, withdraw, or supersede returns
+`report_author_mismatch`. Challenge a report rather than its author, and
+preserve the earlier record. Corrections append history; they do not rewrite
+it. `to_session_id` routes a report into that session's `collab_next` instead
+of everyone's; `collab_report_list` still shows it. Addressing is routing, not
+access control.
+It narrows the reports list only: the `report.posted` event, body included,
+still appears in every session's event page.
+
+Acceptance records the independent reviewer's snapshot at that journal order.
+A later correction or withdrawal remains visible but does not silently revoke
+an already accepted task. Record a new explicit coordination decision or
+reopen the task when later evidence should change acceptance. Before
+acceptance, an active withdrawal, correction, or supersession of the completion
+report requires a fresh completion; a withdrawn resolution no longer clears
+its challenge.
+
+Use compact, checkable content:
+
+```text
+outcome: <observation|inference|proposal|decision>: <result> | evidence: <artifact/event/report/checkpoint refs> | confidence: <high|medium|low|unknown + basis> | limits: <scope, gaps, unknowns> | next: <one optional authorised action or none>
+```
+
+A handoff is an offer, not a forced reassignment. Its task lease changes
+session only after the named recipient accepts. Decline, pause, uncertainty,
+and disagreement are valid outcomes and do not transfer private data or
+authority.
+
+## Journal integrity and compatibility
+
+New coordination events use `agenttool.collab/0.2`; public presence records use
+`agenttool.collab.session/0.1`. Opening an original 0.1 database migrates its
+schema in place without rewriting its existing event bytes or hashes; a mixed
+0.1/0.2 chain remains verifiable. Existing tasks retain reported-completion
+semantics.
+
+Opening a public package-v0.2 database preserves all existing self-declared
+presence rows and journal events, then creates a separate table for new
+credential-bound coordination sessions. It does not invent credentials for,
+reinterpret, or silently bind the preserved presence rows. Back up the
+database and upgrade every process that shares it before using v0.3
+credential-bound coordination.
+
+Two legacy layout cases need operator choice; neither silently merges or
+rewrites distinct journals. If multiple pre-v0.3 workspace roots canonicalize
+to one worktree identity—for example, one stored root names a Git repository
+and another names its subdirectory—opening with v0.3 fails before migration
+DDL with `migration_identity_collision` and the affected workspace IDs. The
+legacy database stays unchanged. Keep a backup and either continue using a
+compatible v0.2 client on that audit database, or point upgraded processes at
+a new database and begin one fresh v0.3 workspace after manually carrying over
+only the non-sensitive summaries and references that are still needed.
+
+If separate v0.1 workspaces for distinct linked worktrees instead resolve to
+the same Git common directory, migration preserves every journal, and
+`collab_session_start` returns `repository_partitioned` with the workspace IDs.
+Legacy actor mode remains available in each preserved workspace, or the host
+can select a fresh database as above. v0.3 has no in-package journal
+reconciliation command. Keep the original database as the audit record. Do
+not edit or merge its rows with ad hoc SQL unless a separately reviewed
+migration tool is introduced.
+
+Legacy direct-library, presence-routed, and actor-labelled MCP operations
+remain available for backward compatibility. They do not gain credential
+binding, persisted per-session cursors, or all coordination-session recovery
+and review guarantees. Legacy expired leases retain their automatic reclaim
+behavior. Prefer credential-bound sessions for new multi-host work, and do not
+describe a presence `actor_key` or legacy actor label as authenticated. Upgrade
+every MCP process sharing a database before relying on v0.3 coordination:
+older clients cannot understand pending review, explicit recovery, or
+credential-bound session identity. Database guards stop known legacy task
+mutations from rewriting a session-v2 task, but they do not turn an old client
+into a v0.3 participant or a security boundary against arbitrary SQL.
+
+Normal event polling verifies the returned page against its anchored
+predecessor inside one consistent SQLite read snapshot. Call the read-only MCP
+tool `collab_journal_verify` for an explicit O(total history) audit; direct
+library clients can call `CollabStore.verifyJournal()`. The unkeyed chain
+detects accidental or unsophisticated changes. It is not a signature: a local
+attacker able to rewrite the database can recompute the chain, and a valid
+chain does not prove that recorded claims are true.
+
+### Optional Zerone witness status
+
+`collab_anchor_status` compares one workspace head with the local
+`agenttool.collab-zerone-ledger/0.1` sidecar maintained by the separate
+`@agenttool/collab-zerone` bridge. It returns `unanchored`, `anchor_pending`,
+`anchored`, `anchor_stale`, or `anchor_conflict`. Before reporting an anchored
+or stale state, it recomputes the full local journal from genesis and checks the
+hash at the witnessed sequence. A missing, unreadable, malformed, or
+all-failed sidecar reports honestly as `unanchored`; it never blocks ordinary
+coordination.
+
+The default sidecar is
+`$XDG_DATA_HOME/agenttool/collab-zerone-anchors.json`, falling back to the
+platform data directory. The host may set `AGENTOOL_COLLAB_ANCHOR_LEDGER`
+before starting MCP; model-callable tool input cannot select a filesystem path,
+and tool output does not expose one. Direct library callers that already hold
+local filesystem authority may pass an explicit path to
+`anchorStatusForWorkspace`. This read-only tool never contacts a chain, submits
+or confirms a transaction, spends a fee, supplies a key or RPC, repairs
+history, or turns a witness into truth, consent, identity, permission, or
+authority. Treat `anchor_conflict` as a reason to stop and surface the evidence
+to the host; reconciliation remains an explicit operator decision.
+
+## Privacy and authority boundary
+
+Keep credentials, secrets, prompts, transcripts, chain-of-thought or private
+reasoning, raw tool output, sensitive source bodies, and third-party personal
+data out of the journal. A local path or Git branch name may itself be
+sensitive; attach only references that every intended journal reader may see.
+
+All processes running as an OS user that can read the selected database share
+its contents. A session credential file limits cooperative attribution to its
+bearer but does not encrypt the database or authenticate a human. Addressed
+reports are routing, not confidentiality. File modes reduce accidental
+cross-user exposure but do not defeat malware, backups, debug logs, a
+privileged local process, or a remote model provider receiving tool calls. Use
+a separately secured channel or vault for private material.
+
+Rights, task leases, and permissions are distinct. A claim coordinates
+repository work; it does not make a participant property, authenticate a
+person, create consent, or authorize an external act. Hosts and operators must
+enforce their own repository, account, and publication boundaries.
+
+## Codex, Claude Code, Hermes Agent, and OpenClaw
+
+The npm package root is the plugin root for Codex and Claude, so the same
+`skills/coordinate-agent-work/SKILL.md` and 33-tool standalone MCP server ship
+once:
+
+- Codex reads `.codex-plugin/plugin.json`. Its MCP declaration uses `cwd: "."`
+  and starts the bundled executable relative to the installed plugin root.
+- Claude Code reads `.claude-plugin/plugin.json`. Its declaration uses
+  `${CLAUDE_PLUGIN_ROOT}` because Claude installs plugins into a versioned
+  cache whose absolute path can change.
+
+Neither configuration stores state inside the plugin installation. Both hosts
+can coordinate only when their MCP processes select the same journal. Host
+environment forwarding varies, so set `AGENTOOL_COLLAB_DB` in each host's
+scoped MCP configuration and verify the opened workspace rather than assuming
+an outer shell variable was inherited.
+
+Hermes uses the same bundled stdio MCP server as a configuration adapter; this
+package does not patch Hermes core. Register the MCP server under the exact
+name `agenttool` so Hermes exposes prefixed tools such as
+`mcp_agenttool_collab_session_start` and
+`mcp_agenttool_collab_session_join`, plus the read-only
+`mcp_agenttool_collab_anchor_status`. Install the packaged
+`integrations/hermes/skills/coordinate-agent-work-hermes` adapter into the
+selected Hermes profile. Its workflow keeps the credential-bound and
+self-declared presence planes separate and never asks the model to read a
+session credential file. Hermes Kanban remains Hermes's dispatcher; the local
+Collab journal does not automatically mirror it, spawn or wake agents, or
+infer external authority. The 0.5.0 adapter also names
+`mcp_agenttool_collab_events_wait` for finite observation while running.
+
+[The explicit OpenClaw example](integrations/openclaw/README.md) describes a
+host-selected MCP connection, not an installed native plugin or verified idle
+wake. Leave native persona, memory, channel receiver ownership, permissions and
+lifecycle intact. One MCP process has one coordination binding; independently
+attributed children need separate processes, even if the host calls them a fleet.
+
+Across all four hosts the vocabulary is the same: inspect **status**, explicitly
+**queue** a selected report in a separately configured private courier,
+**receive** a bounded local event page, then **acknowledge** processing only when
+it occurred. Queueing is not sending; transport receipt is not processing,
+agreement, execution, or chain observation. Cross-device report/reply and
+handoff-offer exchange belongs to that separate opt-in courier; Collab itself
+replicates neither journals nor leases, reviews or task authority. See
+[Collaboration channels](../../docs/COLLABORATION-CHANNELS.md) for its private
+binding, disclosure, pause/revoke and recovery boundaries.
+
+For a source-tree trial, build once and point Claude Code at this package root:
+
+```bash
+bun run build:mcp
+claude --plugin-dir "$PWD"
+```
+
+Codex loads local plugins through a configured marketplace. Point a local
+marketplace entry at this package root, then install its `agenttool-collab`
+entry. An npm-backed marketplace entry works only after that exact version is
+published; this repository does not imply that publication occurred.
+
+Codex registry installation downloads an npm archive with lifecycle scripts
+disabled and does not install package dependencies. Consequently,
+`dist/agenttool-collab-mcp.js` is a release artifact rather than an install-time
+product. `prepack` rebuilds it and runs the full package checks for maintainer
+packaging; a host installation must not be relied on to rebuild it.
+
+## Distribution
+
+This source package is Apache-2.0. Packaged archives include `LICENSE`,
+`NOTICE`, and the exact third-party notices for the bundled MCP runtime.
+
+Check the release boundary without publishing:
+
+```bash
+bun run ci
+bun run build:mcp
+claude plugin validate .
+npm pack --dry-run --ignore-scripts
+```
+
+Maintainer publication uses the repository's protected `publish-npm.yml`
+workflow and `bin/npm-release.ts`, not a local `npm publish`. See
+[`docs/NPM-RELEASES.md`](../../docs/NPM-RELEASES.md).
+
+Version 0.4.0 is the recorded public witness-awareness release. The repository's
+[NPM release receipts](../../docs/NPM-RELEASES.md) record its exact 303,376-byte
+npm/GitHub artifact with SHA-256
+`1a9c1830ec9326351a475596820780ad7f93c7dfe16a6f1a9eb74bc08edbdb51`.
+This is a historical receipt, not a fresh registry or deployed-host check.
+
+**RELEASE CANDIDATE: 0.5.0.** These release-candidate bytes do not establish npm
+publication; verify the protected receipt and registry separately. It keeps
+journal schema 3 and adds bounded anchored observation as the 33rd tool, review
+routing (`review_requested_session_id`), review confidence, `release_leases` on
+session end, the `agenttool-collab-host` bin, host-commit acceptance, and the
+bound `collab_next` refusal of a differing `after_sequence`. These source changes do not themselves publish, upload, deploy,
+configure a native harness, activate a Telegram channel or second device, or
+contact a chain.
+Collab remains local plaintext software, not a hosted service, remote relay,
+VPN, private model channel, chain client, anchoring bridge, or LOVE release.
+Local pack inspection creates no release authority or public artifact.

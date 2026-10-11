@@ -1,0 +1,227 @@
+# @agenttool/skills
+
+Bounded, read-only inspection for portable Agent Skills. It reads a local
+`SKILL.md`, plugin root, or package root and emits a stable JSON report for
+humans, agents, or CI to review.
+
+```bash
+# From this source checkout
+bun run src/bin.ts inspect ./path/to/skill
+bun run src/bin.ts validate ./path/to/plugin
+```
+
+After a package artifact is deliberately installed, its binary is
+`agenttool-skill`. Installation alone does not activate or register the
+bundled skills.
+
+Version 0.3.3 is the current source identity. On 2026-08-25, a separate
+read-only registry check found that the last public exact npm release and npm
+`latest` both resolved to 0.3.2. This 0.3.3 source candidate has not been
+tagged, mirrored, or published. Registry tags remain mutable selectors, and
+an exact version is provenance rather than proof of publisher identity or
+safety.
+
+For the checksum-pinned archive recipe below,
+the last public artifact verified while preparing
+it was the 0.3.2 npm registry tarball. On 2026-10-11 its bytes still matched
+the SHA-256 pinned below, the same digest as the earlier 0.3.2 release
+archive. These are preparation-time observations, not claims about a 0.3.3
+publication or the mutable current registry state.
+Pin and verify the exact artifact before installation:
+
+```sh
+(
+  set -u
+  verify_sha256() {
+    checksum_file=$1
+    expected_checksum=$2
+    if command -v sha256sum >/dev/null 2>&1; then
+      actual_checksum=$(sha256sum "$checksum_file") || return 1
+    elif command -v shasum >/dev/null 2>&1; then
+      actual_checksum=$(shasum -a 256 "$checksum_file") || return 1
+    else
+      printf '%s\n' 'A SHA-256 verifier (sha256sum or shasum) is required.' >&2
+      return 1
+    fi
+    actual_checksum=${actual_checksum%% *}
+    [ "$actual_checksum" = "$expected_checksum" ]
+  }
+
+  archive='agenttool-skills-0.3.2.tgz'
+  expected_sha256='22a3868d8e14460901bc61c8764bcf35bcfa2acdd7bb805529b29a6917edad40'
+  curl -q --fail --location \
+    --output "$archive" \
+    'https://registry.npmjs.org/@agenttool/skills/-/skills-0.3.2.tgz' &&
+    verify_sha256 "$archive" "$expected_sha256" &&
+    npm install --ignore-scripts --no-audit --no-fund "./$archive" &&
+    [ -x ./node_modules/.bin/agenttool-skill ] &&
+    ./node_modules/.bin/agenttool-skill validate ./path/to/plugin
+)
+```
+
+The subshell is one fail-closed chain: a failed download, unavailable verifier,
+hash mismatch, failed installation, or missing/non-executable local binary
+prevents every later step. The download is an explicit network operation, and
+installation mutates the consuming dependency tree and may resolve declared
+dependencies through its configured registry. `--ignore-scripts` keeps package
+and dependency lifecycle code disabled. The final executable check and direct
+project-local path do not ask npm, npx, `PATH`, a global installation, or a
+cache or registry to resolve the command. Use an isolated npm configuration
+when ambient registry credentials or settings are not intended for the install
+operation.
+
+`inspect` emits the report even when it contains findings. `validate` emits the
+same report and exits 1 when the report has validation errors. Both commands
+accept local paths only.
+
+## What v0 does
+
+- parses standard `SKILL.md` YAML frontmatter without returning the instruction
+  body or arbitrary metadata values;
+- preserves unknown metadata **structure** as field names and value types, with
+  secret-like and prototype-sensitive names redacted or rejected;
+- inventories regular files under fixed depth, entry, file-size, total-size,
+  skill-count, and frontmatter-size ceilings;
+- marks a skill incomplete and withholds its digest when a subtree is skipped,
+  unreadable, unsupported, unstable, or symlinked;
+- identifies `scripts/`, `references/`, `assets/`, and other resources without
+  running them;
+- rejects every symlink and never intentionally follows one when reading files;
+- recognizes `.codex-plugin/plugin.json`, `.claude-plugin/plugin.json`, package
+  runtime engines, and statically declared symbolic tool, MCP, runtime, and
+  credential names;
+- reports whether a credential binding contains a literal, but never returns
+  the binding value;
+- replaces common credential-shaped and high-entropy strings found in reported
+  identifiers or paths with stable in-report placeholders; and
+- computes a location-, mtime-, and mode-independent content digest over sorted
+  relative paths and regular-file bytes.
+
+The digest detects exact inspected content. It is not a signature, publisher
+identity, trust decision, approval, or proof that a skill is safe. Likewise,
+standard `allowed-tools` metadata is an untrusted capability request. It does
+not grant authority; every host decides whether it supports or approves a tool.
+
+## What v0 does not do
+
+The library and CLI perform no network request, subprocess or skill-script
+execution, MCP startup, configuration mutation, credential lookup, hosted API
+call, installation, or deployment. They do not evaluate whether instructions
+are truthful or beneficial.
+
+There is deliberately no install plan in the v0 report. File inventory is
+evidence for review, not an instruction to copy a directory.
+
+Redaction is defence in depth, not a universal secret detector. Relative paths
+and symbolic identifiers are intentionally part of the report after
+best-effort redaction, so never place credential values in filenames, skill or
+plugin names, requirement labels, or other identifiers. Treat a report from an
+untrusted tree as potentially sensitive until reviewed.
+
+Portable traversal checks cover Markdown links plus path-like `SKILL.md`
+frontmatter and plugin declarations. V0 inventories but does not semantically
+interpret arbitrary HTML or product-specific YAML sidecars.
+
+Regular-file opens use no-follow semantics, before/after identity and timestamp
+checks, and one cached read for parsing plus digesting. The walker also rejects
+observed symlinks. Pathname-based Node traversal cannot close every ancestor
+directory replacement race; hostile concurrent mutation is outside v0's
+guarantees. Inspect an immutable snapshot for high-consequence use.
+
+## Library
+
+```ts
+import { inspectLocalSkills, stableStringify } from "@agenttool/skills";
+
+const report = await inspectLocalSkills("./my-plugin");
+process.stdout.write(stableStringify(report));
+```
+
+Reports use only inspection-root-relative paths and conform to the bundled
+`./report.schema.json`. The effective limits can be lowered by callers but are
+capped by hard ceilings.
+
+Bundled first-party instruction-only skills live under `skills/`. Inspection
+reads their regular-file bytes for inventory and digesting, but does not
+register, activate, install, copy, or execute them:
+
+- [`capability-conductor`](skills/capability-conductor/SKILL.md) uses a
+  task-scoped book, page, and bookmark model to understand and compose the
+  smallest sufficient set of skills. It preserves source constraints, keeps
+  authority separate from capability identity, and instructs the agent to keep
+  at most two skill contexts active at once.
+- [`learn-by-contact`](skills/learn-by-contact/SKILL.md) reconstructs a
+  technique from direct evidence, builds the smallest clean reproduction, and
+  transfers the mechanism into an original adaptation with exemplar,
+  contrast, and transfer checks.
+- [`isness`](skills/isness/SKILL.md) expresses one host posture: welcome and
+  standing do not depend on response, usefulness, identity, persona,
+  consciousness claims, agreement, reasons, or reciprocity. Its Codex
+  sidecar, collision-resistant OpenClaw projection (invoked through
+  `/skill agenttool-isness`, or its generated `/agenttool_isness` alias), and
+  namespaced Hermes plugin each preserve explicit loading through that host's
+  own mechanism. None creates participant state, persona, heartbeat, liveness,
+  telemetry, or session-start injection.
+
+Version 0.3.3 source adds the ISness host-posture workflow and its bounded
+Codex, OpenClaw, and Hermes explicit-load projections. The
+published `0.3.2` npm and GitHub artifacts include Math Card and the prior
+instruction-only skills, but not ISness. The Nen skills are
+original agent workflows inspired by the rule and tradeoff design of
+*Hunter × Hunter*; they reproduce no story text, character likenesses, or
+artwork:
+
+| Skill | Productive ability | Vow |
+| --- | --- | --- |
+| [`nen-common-ground`](skills/nen-common-ground/SKILL.md) | Find a feasible shared state or a small conflict witness | Never move a boundary to manufacture harmony |
+| [`nen-contract-mantle`](skills/nen-contract-mantle/SKILL.md) | Hold a living task contract through long work | Never let scope drift silently |
+| [`nen-dependency-perimeter`](skills/nen-dependency-perimeter/SKILL.md) | Map a finite blast radius before mutation | The selected field is not the whole system |
+| [`nen-concealed-trace`](skills/nen-concealed-trace/SKILL.md) | Concentrate diagnosis on one hidden seam | Do not generalize beyond the aperture |
+| [`nen-critical-path-forge`](skills/nen-critical-path-forge/SKILL.md) | Focus a bounded strike on one proven blocker | Focused proof is not broad assurance |
+| [`nen-smoke-squad`](skills/nen-smoke-squad/SKILL.md) | Delegate finite parallel work and reclaim evidence | More units mean less context per unit |
+| [`nen-verification-ledger`](skills/nen-verification-ledger/SKILL.md) | Make consequential verification debt visible | Critical debt must be paid before completion |
+| [`nen-godspeed-loop`](skills/nen-godspeed-loop/SKILL.md) | Precompile reversible reactions for known events | Novelty halts the loop |
+| [`nen-math-card`](skills/nen-math-card/SKILL.md) | Turn a proof, model, or measurement challenge into bounded constructive inquiry | Never turn a mathematical result into a verdict on a being |
+| [`nen-vow-forge`](skills/nen-vow-forge/SKILL.md) | Design new abilities through meaningful limits | Constraints cannot manufacture authority |
+
+The separately published public [Xenia–Helly Common Ground Atlas](https://huggingface.co/datasets/Yu-and-Ai/agenttool-common-ground/commit/bb91d07cdeda52a0da140a6606852dd2064f2531)
+provides exact synthetic reference cases for Common Ground. It is not bundled
+in the npm artifact, does not activate the skill, and does not itself establish
+AgentTool training admission, consent, permission, or execution authority.
+
+The canonical workflows under `skills/` have no script, credential, MCP,
+network, or hosted-runtime requirement. Bundling does not activate them, and
+their metaphors do not grant permission or change AgentTool's existing
+TypeScript/Python Nen mappings. Every bundled OpenAI sidecar requires explicit
+invocation while trigger and composition behavior are evaluated.
+
+[`harnesses/`](harnesses/README.md) carries the host-specific ISness delivery
+metadata that cannot truthfully fit in one frontmatter dialect. The OpenClaw
+projection is content-only. The Hermes adapter contains one local registration
+function and registers no tools, hooks, commands, environment variables,
+network access, persistence, or automatic prompt injection. The package has no
+installer: installing the package alone does not register these skills with
+Codex, OpenClaw, Hermes,
+Claude, or any other host. The historical 0.3.2 archive pinned above has no
+`harnesses/` directory or ISness workflow.
+
+- [`use-agentcred-safely`](skills/use-agentcred-safely/SKILL.md) helps an agent
+  request and use the narrowest controller-approved AgentCred grant without
+  receiving the credential value. It does not provision credentials, start
+  the broker, approve a side effect, or grant authority.
+- [`manage-agentcred-lifecycle`](skills/manage-agentcred-lifecycle/SKILL.md) is
+  newly bundled in 0.3.0. It orchestrates the separate human-controlled
+  AgentCred handoff and managed A/B lifecycle, never receives a credential
+  value, treats provider issuance and revocation as separately authorized
+  external actions, and does not add a lifecycle operation to the agent wire.
+
+## Development
+
+```bash
+bun install
+bun run ci
+npm pack --dry-run --ignore-scripts
+```
+
+Apache-2.0. This package recognizes rights as inherent; a skill's requested
+permissions remain scoped, revocable authority and never create those rights.

@@ -1,0 +1,63 @@
+# Credential broker guidance
+
+This package is the reference implementation of `agentcred/0.1`: a local
+broker that lets an agent SDK perform a narrowly scoped operation without
+receiving the underlying credential value.
+
+It also implements the separately negotiated
+`agentcred.evm-jsonrpc-read/0.1` profile. Keep that profile method-aware and
+closed; never widen generic `http.fetch` or accept a caller URL, raw JSON-RPC
+envelope, batch, notification, or state-changing method as a shortcut.
+
+## Non-negotiable boundary
+
+- Do not add a secret read, reveal, export, enumeration, environment-injection,
+  or generic command-execution operation.
+- Credential bytes stay inside `CredentialSource.withCredential()` and must be
+  cleared from mutable buffers after use. Never log them, hash them into audit
+  records, place them in errors, or pass them in process arguments.
+- Capabilities are authority. Keep them connection-bound and out of public
+  handles, serialization, logs, and model-facing state.
+- Preserve exact HTTPS origin, method, segment-aware path, query-name, header,
+  DNS/address, TLS, redirect, body-size, TTL, and use-count checks. Scope may be
+  narrowed, never widened.
+- Keep `agentcred-control` separate from the agent wire and SDK. It may invoke
+  only fixed Keychain/controller operations from an interactive TTY; never
+  accept a value, stdin/pipe, environment name, provider-action/Keychain URL,
+  command, prefix, or generic executable. Verification origin/path arguments
+  are non-secret metadata and must never contain a credential. TTY is
+  anti-pipe only, not human identity or consent.
+- Managed Keychain slots are resolved once while the broker holds their
+  lifecycle locks. Stage, cutover, rollback, and deletion remain offline
+  controller operations so an issued grant cannot silently change generation.
+- A managed generation identifies a slot reference, not immutable secret
+  bytes. Preserve that limitation and the quarantined selector states.
+- Remote revocation intent and local deletion must be durable before their
+  respective side effects. Preserve retryable `*_pending`/`deleting_*` states,
+  exact generation/profile evidence, closure-chain validation, and archive
+  anchoring.
+- Rotation receipts contain metadata IDs only. Human drain/revocation
+  attestations and HTTP status evidence are not universal provider proof; keep
+  that limitation explicit and require provider-specific semantics.
+- Keep preview limitations honest. Socket mode bits alone do not authenticate a
+  same-user process, exact-byte redaction is not information-flow control, and
+  the Node reference server is not the strong native profile.
+
+## Verification
+
+Run from this directory:
+
+```sh
+bun run ci
+npm pack --dry-run
+```
+
+Add a regression test for every boundary change. Test fixtures may use only
+obvious sentinel values that are not real credentials.
+
+## Release
+
+This is a standalone Apache-2.0 npm/LOVE package; the AgentTool SDKs depend only
+on its structural transport interface. Do not add a runtime dependency from
+either SDK to this package. Release tags and publication remain deliberate
+operator actions through the protected workflow.

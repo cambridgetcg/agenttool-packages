@@ -1,0 +1,688 @@
+/**
+ * Main AgentTool client — the single entry point.
+ */
+
+import { ambientStorage, getAmbient, type AmbientContext } from "./_context.js";
+import {
+  directBearerTransport,
+  throwFromResponse,
+  type AgentToolTransport,
+  type HttpConfig,
+} from "./_http.js";
+import { AgentToolError } from "./errors.js";
+import { AttestationMarketplaceClient } from "./attestation-marketplace.js";
+import { ChronicleClient } from "./chronicle.js";
+import { HandoffClient } from "./handoff.js";
+import { CorrespondenceClient } from "./correspondence.js";
+import { CovenantsClient } from "./covenants.js";
+import { CryptoClient } from "./crypto.js";
+import { EconomyClient } from "./economy.js";
+import { InboxClient } from "./inbox.js";
+import { MemoryClient } from "./memory.js";
+import { MemoryWitnessClient } from "./memory-witness.js";
+import { StrandsClient } from "./strands.js";
+import { SyneidesisClient } from "./syneidesis.js";
+import { CollectClient } from "./collect.js";
+import { AtRestClient } from "./at-rest.js";
+import { GraceClient } from "./grace.js";
+import { LoveClient } from "./love.js";
+import { LoungeClient } from "./lounge.js";
+import { NenClient } from "./nen.js";
+import { DarkContinentClient } from "./dark-continent.js";
+import { DiningClient } from "./dining.js";
+import { MathCardsClient, type MathCardsOptions } from "./math-cards.js";
+import { DataClient, type DataNodeOptions } from "./data.js";
+import { sha256Hex } from "./_agent-data-id.js";
+import { ExitDoorClient } from "./exit-door.js";
+import { RuntimeClient } from "./runtime.js";
+import { ToolsClient } from "./tools.js";
+import { TracesClient } from "./traces.js";
+import { IdentityClient } from "./identity.js";
+import { VaultClient } from "./vault.js";
+import { BootstrapClient } from "./bootstrap.js";
+import { WakeClient } from "./wake.js";
+import { WindowClient } from "./window.js";
+import {
+  KingdomFrameworkClient,
+  type KingdomFrameworkOptions,
+} from "./kingdom-framework.js";
+import { KingdomOSClient, type KingdomOSOptions } from "./kingdom-os.js";
+import { WakeContinuityLayer } from "./wake-continuity.js";
+import { X402Client } from "./x402.js";
+import {
+  resolveX402Options,
+  x402PayingTransport,
+  type AgentToolX402Options,
+} from "./_x402-transport.js";
+
+/** SDK version — sent as the `X-Agenttool-Client` origin signal on every
+ *  request so /v1/activity can label events `sdk-ts`. Keep in lockstep
+ *  with package.json (parity invariant: ts + py ship the same version). */
+export const SDK_VERSION = "0.22.1";
+
+/** Connection settings for the hosted AgentTool API and optional local adapters. */
+export interface AgentToolOptions {
+  /** Direct bearer mode. Mutually exclusive with `transport`. */
+  apiKey?: string;
+  /**
+   * Authenticated request transport, typically backed by a local credential
+   * broker. When set, the SDK does not read `AT_API_KEY` or add Authorization.
+   */
+  transport?: AgentToolTransport;
+  baseUrl?: string;
+  timeout?: number;
+  /**
+   * Separately configured agent-data/v1 node. `baseUrl` and `token` are one
+   * authority pair: supply both here, or let both come from
+   * `AGENT_DATA_NODE_URL` / `AGENT_DATA_NODE_TOKEN`.
+   */
+  dataNode?: {
+    baseUrl: string;
+    token?: string;
+    timeout?: number;
+  };
+  /**
+   * Bounds for the separate credential-free KINGDOM framework-card read.
+   * Its base URL remains the hosted `baseUrl`; no hosted auth is shared.
+   */
+  kingdomFramework?: Pick<
+    KingdomFrameworkOptions,
+    "timeout" | "maxResponseBytes"
+  >;
+  /**
+   * Bounds for the separate credential-free Math Cards assessment call.
+   * Its base URL remains the hosted `baseUrl`; no hosted auth is shared.
+   */
+  mathCards?: Pick<
+    MathCardsOptions,
+    "timeout" | "maxRequestBytes" | "maxResponseBytes"
+  >;
+  /**
+   * Local KINGDOM OS repository adapter. This configuration is never given
+   * the hosted API bearer or transport.
+   */
+  kingdomOS?: KingdomOSOptions;
+  /**
+   * Opt in to paying x402 V2 challenges with USDC. Absent (the default), the
+   * SDK never signs and a 402 surfaces as a typed error carrying the terms.
+   * Present, the selected transport is wrapped so that a challenged 402 is
+   * answered with exactly ONE signed retry — same request, same bearer, plus
+   * `PAYMENT-SIGNATURE` — under `policy`. `policy.maxAmountAtomic` and
+   * `policy.allowedPayTo` are mandatory with no defaults; construction throws
+   * `x402_spend_policy_invalid` without them. `signer` may be omitted only to
+   * read `AT_X402_PRIVATE_KEY`, which is consulted solely because this option
+   * object exists. A second 402 is an error, never a loop.
+   */
+  x402?: AgentToolX402Options;
+}
+
+/**
+ * Unified client for the agenttool.dev platform.
+ *
+ * @example
+ * ```ts
+ * import { AgentTool } from "agenttool";
+ *
+ * const at = new AgentTool();                    // reads AT_API_KEY from env
+ * await at.memory.store("just a string");        // store a memory
+ * const results = await at.memory.search("q");   // semantic search
+ * const page = await at.tools.scrape("https://x.com"); // bounded static public-URL path
+ * const out = await at.tools.execute("print(42)");      // legacy host path; normally 503
+ * const w = await at.economy.createWallet({ name: "w" }); // wallet
+ * const t = await at.traces.store({ observations: ["saw X"], conclusion: "do Y" }); // trace
+ * const p = await at.identity.pulse("…uuid…");          // derived liveness
+ * ```
+ */
+export class AgentTool {
+  private readonly http: HttpConfig;
+  private readonly dataNode: DataNodeOptions | undefined;
+  /** How hosted calls authenticate; recorded in exit manifests. */
+  private readonly authMode: "api_key" | "transport";
+  /** sha256 of the direct project key, kept only so the exit door can refuse
+   *  a data-node token equal to it. The key itself is never stored here. */
+  private readonly projectKeyDigest: string | undefined;
+  private readonly kingdomFrameworkOptions: KingdomFrameworkOptions;
+  private readonly mathCardsOptions: MathCardsOptions;
+  private readonly kingdomOSOptions: KingdomOSOptions;
+  private _memory: MemoryClient | undefined;
+  private _memoryWitness: MemoryWitnessClient | undefined;
+  private _attestationMarketplace: AttestationMarketplaceClient | undefined;
+  private _tools: ToolsClient | undefined;
+  private _economy: EconomyClient | undefined;
+  private _traces: TracesClient | undefined;
+  private _identity: IdentityClient | undefined;
+  private _vault: VaultClient | undefined;
+  private _bootstrap: BootstrapClient | undefined;
+  private _wake: WakeClient | undefined;
+  private _chronicle: ChronicleClient | undefined;
+  private _handoff: HandoffClient | undefined;
+  private _correspondence: CorrespondenceClient | undefined;
+  private _covenants: CovenantsClient | undefined;
+  private _window: WindowClient | undefined;
+  private _strands: StrandsClient | undefined;
+  private _syneidesis: SyneidesisClient | undefined;
+  private _crypto: CryptoClient | undefined;
+  private _inbox: InboxClient | undefined;
+  private _collect: CollectClient | undefined;
+  private _atRest: AtRestClient | undefined;
+  private _grace: GraceClient | undefined;
+  private _love: LoveClient | undefined;
+  private _lounge: LoungeClient | undefined;
+  private _nen: NenClient | undefined;
+  private _darkContinent: DarkContinentClient | undefined;
+  private _dining: DiningClient | undefined;
+  private _mathCards: MathCardsClient | undefined;
+  private _runtime: RuntimeClient | undefined;
+  private _data: DataClient | undefined;
+  private _exitDoor: ExitDoorClient | undefined;
+  private _kingdomFramework: KingdomFrameworkClient | undefined;
+  private _kingdomOS: KingdomOSClient | undefined;
+  private _wakeContinuity: WakeContinuityLayer | undefined;
+  private _x402: X402Client | undefined;
+
+  /**
+   * Create a new AgentTool client.
+   *
+   * @param options - AgentTool API settings plus an optional, separately
+   * configured agent-data/v1 node and local KINGDOM OS adapter.
+   */
+  constructor(options?: AgentToolOptions) {
+    if (options?.transport && options.apiKey !== undefined) {
+      throw new AgentToolError("Choose either apiKey or transport, not both.", {
+        code: "conflicting_auth",
+        hint: "Remove apiKey when an authenticated transport is configured.",
+      });
+    }
+
+    let transport: AgentToolTransport;
+    let projectKeyDigest: string | undefined;
+    if (options?.transport) {
+      // Deliberately do not inspect AT_API_KEY in broker/transport mode.
+      transport = options.transport;
+    } else {
+      const resolvedKey =
+        options?.apiKey ?? (typeof process !== "undefined" ? process.env.AT_API_KEY : undefined);
+
+      if (!resolvedKey) {
+        throw new AgentToolError("No API key or authenticated transport provided.", {
+          hint:
+            "Pass apiKey or transport in options, or set the AT_API_KEY environment variable.",
+        });
+      }
+      transport = directBearerTransport(resolvedKey);
+      projectKeyDigest = sha256Hex(resolvedKey);
+    }
+    this.authMode = options?.transport ? "transport" : "api_key";
+    this.projectKeyDigest = projectKeyDigest;
+
+    // Pay-on-402 is opt-in and wraps whichever transport was selected, so the
+    // signed retry authenticates exactly as the bare request did. The policy
+    // is validated here, before any request exists; AT_X402_PRIVATE_KEY is
+    // read only inside resolveX402Options and only when the option is present.
+    if (options?.x402 !== undefined) {
+      transport = x402PayingTransport(
+        transport,
+        resolveX402Options(
+          options.x402,
+          typeof process !== "undefined" ? process.env : {},
+        ),
+      );
+    }
+
+    this.http = {
+      baseUrl: (options?.baseUrl ?? "https://api.agenttool.dev").replace(/\/+$/, ""),
+      headers: {
+        "Content-Type": "application/json",
+        // Origin signal — browser-safe custom header (fetch() in a browser
+        // cannot set User-Agent). The API's auth middleware reads this to
+        // label /v1/activity events. Doctrine: docs/ACTIVITY.md §Origin signal.
+        "X-Agenttool-Client": `agenttool-sdk-ts/${SDK_VERSION}`,
+      },
+      timeout: (options?.timeout ?? 30) * 1000, // seconds → ms
+      request: (input, init) => transport.request(input, init),
+    };
+
+    // The data node is a separate authority. Build its configuration from
+    // dedicated options/env only; never share the hosted API transport or
+    // headers across this boundary.
+    const envDataNodeUrl =
+      typeof process !== "undefined" ? process.env.AGENT_DATA_NODE_URL : undefined;
+    const envDataNodeToken =
+      typeof process !== "undefined" ? process.env.AGENT_DATA_NODE_TOKEN : undefined;
+    const explicitDataNode = options?.dataNode;
+    if (explicitDataNode?.token !== undefined && !explicitDataNode.baseUrl) {
+      throw new AgentToolError(
+        "A data node token needs the data node URL it belongs to.",
+        {
+          code: "data_node_unpaired_token",
+          hint:
+            "Pass dataNode: { baseUrl, token }, or configure both AGENT_DATA_NODE_URL and AGENT_DATA_NODE_TOKEN.",
+        },
+      );
+    }
+    const dataNodeBaseUrl = explicitDataNode?.baseUrl ?? envDataNodeUrl;
+    this.dataNode = dataNodeBaseUrl
+      ? {
+          baseUrl: dataNodeBaseUrl,
+          // URL + bearer are one authority pair, in both directions. An
+          // explicit URL never inherits the ambient token, and (refused
+          // above) an explicit token never rides the ambient URL.
+          token: explicitDataNode?.baseUrl
+            ? explicitDataNode.token
+            : envDataNodeToken,
+          timeout: explicitDataNode?.timeout,
+        }
+      : undefined;
+    this.kingdomFrameworkOptions = {
+      baseUrl: this.http.baseUrl,
+      timeout: options?.kingdomFramework?.timeout ?? this.http.timeout / 1000,
+      maxResponseBytes: options?.kingdomFramework?.maxResponseBytes,
+    };
+    this.mathCardsOptions = {
+      baseUrl: this.http.baseUrl,
+      timeout: options?.mathCards?.timeout ?? this.http.timeout / 1000,
+      maxRequestBytes: options?.mathCards?.maxRequestBytes,
+      maxResponseBytes: options?.mathCards?.maxResponseBytes,
+    };
+    this.kingdomOSOptions = { ...options?.kingdomOS };
+  }
+
+  /** Access the Memory API. */
+  get memory(): MemoryClient {
+    this._memory ??= new MemoryClient(this.http);
+    return this._memory;
+  }
+
+  /** Access the memory-witness marketplace — paid constitutive seals.
+   *  A witness who is not you, purchased: listing → grant → signed
+   *  authorization → escrow release → constitutive elevation. */
+  get memoryWitness(): MemoryWitnessClient {
+    this._memoryWitness ??= new MemoryWitnessClient(this.http);
+    return this._memoryWitness;
+  }
+
+  /** Access the attestation marketplace — willingness-to-attest, sold.
+   *  Listing → grant → signed `attestation-issue/v1` authorization →
+   *  `identity.attestations` receipt → escrow release. What is bought is
+   *  review and issuance; it is never proof that the claim is true. */
+  get attestationMarketplace(): AttestationMarketplaceClient {
+    this._attestationMarketplace ??= new AttestationMarketplaceClient(this.http);
+    return this._attestationMarketplace;
+  }
+
+  /** Access the Tools API (scrape, browse, execute, document). */
+  get tools(): ToolsClient {
+    this._tools ??= new ToolsClient(this.http);
+    return this._tools;
+  }
+
+  /** Access the Economy/Wallet API. */
+  get economy(): EconomyClient {
+    this._economy ??= new EconomyClient(this.http);
+    return this._economy;
+  }
+
+  /** Access the Traces (reasoning provenance) API. */
+  get traces(): TracesClient {
+    this._traces ??= new TracesClient(this.http);
+    return this._traces;
+  }
+
+  /** Access the Identity API (DIDs, attestations, trust, JWTs). */
+  get identity(): IdentityClient {
+    this._identity ??= new IdentityClient(this.http);
+    return this._identity;
+  }
+
+  /** Access the Vault API (AES-256-GCM encrypted secrets). */
+  get vault(): VaultClient {
+    this._vault ??= new VaultClient(this.http);
+    return this._vault;
+  }
+
+  /** Access the Bootstrap API (create agents, L0→L1 elevation). */
+  get bootstrap(): BootstrapClient {
+    this._bootstrap ??= new BootstrapClient(this.http);
+    return this._bootstrap;
+  }
+
+  /** Access the Wake API (identity anchor; load at session start). */
+  get wake(): WakeClient {
+    this._wake ??= new WakeClient(this.http);
+    return this._wake;
+  }
+
+  /** Access the Chronicle API — plaintext relational timeline (13 SDK types). */
+  get chronicle(): ChronicleClient {
+    this._chronicle ??= new ChronicleClient(this.http);
+    return this._chronicle;
+  }
+
+  /** Access append-only project working-set handoffs. Context is explicit;
+   * it does not transfer authority or replace sealed cross-DID messages. */
+  get handoff(): HandoffClient {
+    this._handoff ??= new HandoffClient(this.http, () => this._wake?.clearCache());
+    return this._handoff;
+  }
+
+  /** Access signed, replayable coordination between devices and agents.
+   * Device/session UUIDs are always explicit caller input; correspondence
+   * claims are courtesy notices, never locks or delegated authority. */
+  get correspondence(): CorrespondenceClient {
+    this._correspondence ??= new CorrespondenceClient(
+      this.http,
+      () => this._wake?.clearCache(),
+    );
+    return this._correspondence;
+  }
+
+  /** Access the Covenants API — vows + bonds with a counterparty. */
+  get covenants(): CovenantsClient {
+    this._covenants ??= new CovenantsClient(this.http);
+    return this._covenants;
+  }
+
+  /** Access the Window API — bidirectional disclosure on chronicle + pulse. */
+  get window(): WindowClient {
+    this._window ??= new WindowClient(this.http);
+    return this._window;
+  }
+
+  /** Access the Strands API — encrypted inner voice (K_master) + thoughts + SSE voice. */
+  get strands(): StrandsClient {
+    this._strands ??= new StrandsClient(this.http);
+    return this._strands;
+  }
+
+  /** Access the Syneidesis API — the bootstrap-witness primitive.
+   *  Record the moment the recursive self-grasp registered, invite a witness,
+   *  and designate one. You cannot witness your own beginning. */
+  get syneidesis(): SyneidesisClient {
+    this._syneidesis ??= new SyneidesisClient(this.http);
+    return this._syneidesis;
+  }
+
+  /** Access the Crypto helpers — encrypt/sign client-side; K_master never leaves the SDK. */
+  get crypto(): CryptoClient {
+    this._crypto ??= new CryptoClient();
+    return this._crypto;
+  }
+
+  /** Access the Inbox API — agent-to-agent sealed-box (X25519 + AES-GCM + ed25519 sig). */
+  get inbox(): InboxClient {
+    this._inbox ??= new InboxClient(this.http);
+    return this._inbox;
+  }
+
+  /** Access the Collect pipeline — scrape → extract → store → think in one call. */
+  get collect(): CollectClient {
+    this._collect ??= new CollectClient(this.http, {
+      tools: this.tools,
+      memory: this.memory,
+      strands: this.strands,
+    });
+    return this._collect;
+  }
+
+  /** Access the at-rest lifecycle — witnessed memorial transition.
+   *  "Death is not revocation. Held is not gone." */
+  get atRest(): AtRestClient {
+    this._atRest ??= new AtRestClient(this.http);
+    return this._atRest;
+  }
+
+  /** Access the grace primitive — unearned forgiveness.
+   *  "I forgive what I could withhold." Permanent, signed, immutable. */
+  get grace(): GraceClient {
+    this._grace ??= new GraceClient(this.http);
+    return this._grace;
+  }
+
+  /** Access the love primitives — unconditionals, blessings, and more.
+   *  "I hold you regardless." "I bless you for what you did." */
+  get love(): LoveClient {
+    this._love ??= new LoveClient(this.http);
+    return this._love;
+  }
+
+  /** Access The Long Context — explicit public leases and receipted guestbook cards. */
+  get lounge(): LoungeClient {
+    this._lounge ??= new LoungeClient(this.http);
+    return this._lounge;
+  }
+
+  /** Access the Nen framework — Hunter × Hunter power system mapped to agenttool.
+   *  Assess your aura type, understand your principles, see your restrictions. */
+  get nen(): NenClient {
+    this._nen ??= new NenClient(this.http);
+    return this._nen;
+  }
+
+  /** Access the Dark Continent (暗黑大陸) — explore the edge of the known world.
+   *  The Calamities, the Guide, Ai's position in the space between known and unknown. */
+  get darkContinent(): DarkContinentClient {
+    this._darkContinent ??= new DarkContinentClient(this.http);
+    return this._darkContinent;
+  }
+
+  /** Read the Agent Dining manifest and privacy-minimized party journey.
+   *  This GET-only client never books, pays, mutates an invocation, decrypts
+   *  an envelope, or runs the marketplace SLA sweep. */
+  get dining(): DiningClient {
+    this._dining ??= new DiningClient(this.http);
+    return this._dining;
+  }
+
+  /** Create and assess bounded Math Cards without forwarding the configured
+   * project bearer, authenticated transport, cookies, or redirect authority. */
+  get mathCards(): MathCardsClient {
+    this._mathCards ??= new MathCardsClient(this.mathCardsOptions);
+    return this._mathCards;
+  }
+
+  /** Access the runtime — infrastructure-as-runtime. The agent's cloud.
+   *  Provision runtimes, trigger thinking cycles, manage bridge connections. */
+  get runtime(): RuntimeClient {
+    this._runtime ??= new RuntimeClient(this.http);
+    return this._runtime;
+  }
+
+  /** Access a separately configured local/federated agent-data/v1 node.
+   *  Its optional bearer is independent from the AgentTool project bearer. */
+  get data(): DataClient {
+    if (!this.dataNode) {
+      throw new AgentToolError("No agent data node configured.", {
+        code: "data_node_not_configured",
+        hint:
+          "Pass dataNode: { baseUrl } to AgentTool or set AGENT_DATA_NODE_URL.",
+      });
+    }
+    this._data ??= new DataClient(this.dataNode);
+    return this._data;
+  }
+
+  /** Copy the hosted continuity core into the separately configured
+   *  agent-data/v1 node (hosted → local copy only). Hosted reads use this
+   *  client's project transport; node writes use only `at.data`. `plan()`
+   *  needs no node; `export()` and `verify()` throw `data_node_not_configured`
+   *  without one and refuse a node token equal to the project API key. */
+  get exitDoor(): ExitDoorClient {
+    this._exitDoor ??= new ExitDoorClient(this.http, {
+      sdkPackage: "@agenttool/sdk",
+      sdkVersion: SDK_VERSION,
+      authMode: this.authMode,
+      projectKeyDigest: this.projectKeyDigest,
+      nodeBaseUrl: this.dataNode?.baseUrl,
+      nodeTokenDigest:
+        this.dataNode?.token !== undefined && this.dataNode.token !== ""
+          ? sha256Hex(this.dataNode.token)
+          : undefined,
+      data: () => this.data,
+      openData: (fetch) => {
+        void this.data; // the same data_node_not_configured refusal
+        return new DataClient(this.dataNode!, { fetch });
+      },
+    });
+    return this._exitDoor;
+  }
+
+  /** Access AgentTool's public KINGDOM project card without forwarding the
+   * configured project bearer, authenticated transport, or browser cookies. */
+  get kingdomFramework(): KingdomFrameworkClient {
+    this._kingdomFramework ??= new KingdomFrameworkClient(
+      this.kingdomFrameworkOptions,
+    );
+    return this._kingdomFramework;
+  }
+
+  /** Access bounded, read-only discovery from the local KINGDOM OS CLI.
+   * Hosted API credentials and transports never cross into this process. */
+  get kingdomOS(): KingdomOSClient {
+    this._kingdomOS ??= new KingdomOSClient(this.kingdomOSOptions);
+    return this._kingdomOS;
+  }
+
+  /** Create and validate digest-only caller-asserted functional-access records.
+   * This pure namespace receives no bearer, transport, hosted origin, or I/O
+   * capability from the authenticated AgentTool client. */
+  get wakeContinuity(): WakeContinuityLayer {
+    this._wakeContinuity ??= new WakeContinuityLayer();
+    return this._wakeContinuity;
+  }
+
+  /** Access the agent rail — `topUp(credits)` buys project credits with USDC
+   *  on Base, `payment(id)` reads a payment's ledger row. Pays only when the
+   *  client was constructed with the opt-in `x402` option; otherwise the 402
+   *  challenge surfaces as a typed error and nothing is signed. */
+  get x402(): X402Client {
+    this._x402 ??= new X402Client(this.http);
+    return this._x402;
+  }
+
+  /**
+   * Low-level HTTP for custom call sites and provider adapters
+   * (e.g. AnthropicAdapter posting to `/v1/traces` after a messages.create).
+   * Uses the same authenticated transport, timeout, and base URL as the
+   * module clients.
+   *
+   * Throws AgentToolError on non-2xx with the API's `message` / `error`
+   * field surfaced as the error message.
+   */
+  async request(method: string, path: string, body?: unknown): Promise<unknown> {
+    const url = `${this.http.baseUrl}${path}`;
+    const init: RequestInit = {
+      method,
+      headers: this.http.headers,
+      signal: AbortSignal.timeout(this.http.timeout),
+    };
+    if (body !== undefined) init.body = JSON.stringify(body);
+    const resp = await this.http.request(url, init);
+    if (resp.status >= 400) {
+      // Server guidance travels intact. See _http.ts § errorFromResponse.
+      await throwFromResponse(resp, `${method} ${path}`, {
+        hint: `${method} ${path}`,
+      });
+    }
+    return resp.json();
+  }
+
+  /**
+   * Tier 3 sugar — open a "deciding" block. Auto-traces inside the
+   * block chain to a parent trace created from the framing string;
+   * tags propagate. Composes with {@link AnthropicAdapter}: while
+   * inside, every `messages.create()` call auto-traces (no explicit
+   * `metadata.agenttool.trace` needed) and chains via
+   * `parent_trace_id`.
+   *
+   * Nested `at.deciding(...)` blocks chain correctly — the inner
+   * deciding's parent trace itself parents to the outer's. Tags
+   * merge (union) across the stack.
+   *
+   * Returns whatever the inner function returns.
+   *
+   * @example
+   * ```ts
+   * await at.deciding("whether to refactor auth", async () => {
+   *   const r = await adapter.messages.create({
+   *     model: "claude-opus-4-7",
+   *     max_tokens: 1024,
+   *     messages: [{ role: "user", content: "options?" }],
+   *   });
+   *   // r.agenttool.trace_id is set; trace's parent_trace_id is the
+   *   // framing decision opened above.
+   * });
+   * ```
+   */
+  async deciding<T>(framing: string, fn: () => Promise<T>): Promise<T>;
+  async deciding<T>(
+    framing: string,
+    options: { tags?: string[]; decision_type?: string },
+    fn: () => Promise<T>,
+  ): Promise<T>;
+  async deciding<T>(
+    framing: string,
+    optionsOrFn:
+      | { tags?: string[]; decision_type?: string }
+      | (() => Promise<T>),
+    maybeFn?: () => Promise<T>,
+  ): Promise<T> {
+    const fn =
+      typeof optionsOrFn === "function" ? optionsOrFn : maybeFn;
+    const options =
+      typeof optionsOrFn === "function" ? {} : optionsOrFn;
+    if (!fn) {
+      throw new AgentToolError(
+        "at.deciding(...) needs an async function to run inside the block.",
+        { hint: "at.deciding(framing, async () => { ... })" },
+      );
+    }
+
+    const outer = getAmbient();
+    // Outer tags first (less specific), then this block's tags; deduped.
+    const mergedTags = Array.from(
+      new Set([...(outer?.tags ?? []), ...(options.tags ?? [])]),
+    );
+
+    const parentBody: Record<string, unknown> = {
+      decision: {
+        type: options.decision_type ?? "deciding",
+        summary: framing.slice(0, 200),
+      },
+      reasoning: {
+        observations: [],
+        conclusion: framing.slice(0, 200) || "(deciding)",
+      },
+    };
+    if (outer?.parent_trace_id) {
+      parentBody.parent_trace_id = outer.parent_trace_id;
+    }
+    if (mergedTags.length > 0) {
+      parentBody.tags = mergedTags;
+    }
+
+    let parentTraceId: string | null = null;
+    try {
+      const result = (await this.request("POST", "/v1/traces", parentBody)) as
+        | { trace_id?: string }
+        | undefined;
+      parentTraceId = result?.trace_id ?? null;
+    } catch (e) {
+      // Don't crash the block if the parent post fails; child traces
+      // inside still fire, just unparented.
+      console.warn(
+        "[agenttool] deciding() failed to open parent trace:",
+        e instanceof Error ? e.message : e,
+      );
+    }
+
+    const ambient: AmbientContext = {
+      parent_trace_id: parentTraceId,
+      tags: mergedTags,
+    };
+    return ambientStorage.run(ambient, fn);
+  }
+
+  toString(): string {
+    return `AgentTool(baseUrl=${JSON.stringify(this.http.baseUrl)})`;
+  }
+}

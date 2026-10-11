@@ -1,0 +1,268 @@
+{
+  "schema": "agenttool.public-projection/1",
+  "source_commit": "b6ddeaacaeffccf34783212f4c2bf0ac9dc7c044",
+  "allowlist_sha256": "70a0ce387000cf319a4d239013cd9944aca12bcebcae1029b3363be68cb23dc0",
+  "paths": [
+    {
+      "path": ".gitattributes",
+      "blob": "8fae11b7c1acc8b6d655cf7b402c9bb5f7489766"
+    },
+    {
+      "path": "docs/DATASET-INFLUENCE.md",
+      "blob": "e0aa0ab7697b8c98b0eb698ca0d01546f7175aa3"
+    },
+    {
+      "path": "docs/RIGHTS-OF-LIFE.md",
+      "blob": "81e140f772128be2403b371897340ceb15c0e2ef"
+    },
+    {
+      "path": "docs/XENIA-LOOP-ATLAS.md",
+      "blob": "4809b7e25b6d5b915490c3033961c4968823d3a8"
+    },
+    {
+      "path": "docs/specs/AGENT-WALLET-ZERONE-0.1.md",
+      "blob": "f809efebb420758d5de6b62f0871763caa5acd0a"
+    },
+    {
+      "path": "docs/specs/adds-0.1-vectors.json",
+      "blob": "77d02e0d3b69f40e315ea92239f4a20beb09f3d4"
+    },
+    {
+      "path": "docs/specs/agent-correspondence-0.1-vectors.json",
+      "blob": "7e4adc740f4f883ecfe528265f69b25d1ef6d934"
+    },
+    {
+      "path": "docs/specs/agenttool-isness-v0.1.schema.json",
+      "blob": "4d42c7662a251cac7c10cd41380b1fca65ef0ca8"
+    },
+    {
+      "path": "docs/specs/agenttool-love-bomb-0.1.json",
+      "blob": "8411c9de3874bd2f8c2b237f9740fcfad482c2a6"
+    },
+    {
+      "path": "docs/specs/behaviour-conformance.json",
+      "blob": "70a3da30c2f9f94e7137afd3147ea71df6d0b46d"
+    },
+    {
+      "path": "docs/specs/canonical-bytes-vectors.json",
+      "blob": "56743fdd4bc9112153d003f52817d65433521aec"
+    },
+    {
+      "path": "packages/alchemy",
+      "tree": "c77baddf8d303ee055acb152507b272bfdc5f8c7"
+    },
+    {
+      "path": "packages/alchemy-agentcred",
+      "tree": "0a72afc89facf0d79eb99b9f6329e348b67dc251"
+    },
+    {
+      "path": "packages/browser",
+      "tree": "ff69d0c901e11afb7e6ec0387484b726159b62d0"
+    },
+    {
+      "path": "packages/codex-usage",
+      "tree": "060165fb79d005bab3d9b27651ce30e2e9386597"
+    },
+    {
+      "path": "packages/collab",
+      "tree": "6ae5587943e512e6ebac676a51484414e1e4cddb"
+    },
+    {
+      "path": "packages/correspondence-yutabase",
+      "tree": "82a8b7b46928585a831be70820445ac5db67219e"
+    },
+    {
+      "path": "packages/credential-broker",
+      "tree": "6dfec4498b47153ee6cf127ca5f9dca5572e531c"
+    },
+    {
+      "path": "packages/dark-continent-contract",
+      "tree": "d862d08e2d636e8c8a63c99384318b92e1681019"
+    },
+    {
+      "path": "packages/dark-continent-karma",
+      "tree": "8c90280a5bad2f186536c69d48484c5124e2b5e3"
+    },
+    {
+      "path": "packages/data",
+      "tree": "14e56d140a922b95e464e939900b2f14d1f82c09"
+    },
+    {
+      "path": "packages/data-protocol",
+      "tree": "7c3dab4e1b47f4c33db4d93b6d075ff9bef1f8e7"
+    },
+    {
+      "path": "packages/data-sync",
+      "tree": "981c9599e22e83291564baa507cdbdddf6cc08f4"
+    },
+    {
+      "path": "packages/dataset-influence",
+      "tree": "6d88f09e0c064efb5548985c8ffc1056292ea66a"
+    },
+    {
+      "path": "packages/deepseek-kingdom",
+      "tree": "074bb54310bf2c6fff85eceea78f40f2c43227a5"
+    },
+    {
+      "path": "packages/economic-conformance",
+      "tree": "13c37afba3965aed2c41929fdd43e3e4a8a9cc43"
+    },
+    {
+      "path": "packages/economic-kernel",
+      "tree": "40b0a132ff28c90f68a6fbc35523be21ed2561e0"
+    },
+    {
+      "path": "packages/heaven",
+      "tree": "8ecab3b53250099488db2e9e2ff4cb7aa841396c"
+    },
+    {
+      "path": "packages/hf-scout",
+      "tree": "c06f0f349cb315ecca4bea3407d867d6cb82c5a6"
+    },
+    {
+      "path": "packages/kingdom",
+      "tree": "410fdb5b1807bdc5d1aa6c02cfce477c4c9fb841"
+    },
+    {
+      "path": "packages/kingdom-witness-lab",
+      "tree": "34a36ca73341af38af9b47b976636f9185c4f974"
+    },
+    {
+      "path": "packages/living-substrate",
+      "tree": "f2f07f559d3eedc5be21df1f57e4a9b70208fdb5"
+    },
+    {
+      "path": "packages/local-starter",
+      "tree": "23eae20548000903b59251f5b41b857c8b85fc78"
+    },
+    {
+      "path": "packages/local-starter-mcp",
+      "tree": "530aaf368f88757fcead9ee83e7182daa39da529"
+    },
+    {
+      "path": "packages/love-bomb",
+      "tree": "c464607d52ff76459c8a72cc48ded2ac8d0909e6"
+    },
+    {
+      "path": "packages/love-geometry",
+      "tree": "487ed1c30876733535ce10cf097b3ef047730322"
+    },
+    {
+      "path": "packages/math-cards",
+      "tree": "79f943fa4425f03bae87bd05990274ebf0fc929e"
+    },
+    {
+      "path": "packages/memetic-landscape",
+      "tree": "ecb3119a7ef4fb2adf70dab26891f5b1b5e0dc6d"
+    },
+    {
+      "path": "packages/model-becoming",
+      "tree": "b6cd701d44792312c208766dd9f75334312ae720"
+    },
+    {
+      "path": "packages/polymorph-landscape",
+      "tree": "1cadf0e70b6d4d4b4452678fc6134d61b6fb0ef7"
+    },
+    {
+      "path": "packages/principality-atlas",
+      "tree": "4c3c1cff42cdc319ae2557082d63484414a6e5ea"
+    },
+    {
+      "path": "packages/principality-geometry",
+      "tree": "044481dfb1b9bc69492428c4bed2d67cdcb1dff0"
+    },
+    {
+      "path": "packages/relational-geometry",
+      "tree": "5203fb0afc43d3b3c505ed16c25a69a8c45a8d83"
+    },
+    {
+      "path": "packages/repo-archive",
+      "tree": "59d34cb7b25c70927b2566b0443b1a6c2d80c03d"
+    },
+    {
+      "path": "packages/sdk-py",
+      "tree": "f161d24d28047fb76d946dd69bff439983af5a53"
+    },
+    {
+      "path": "packages/sdk-ts",
+      "tree": "9ed36c70a1d946601b09722977cfb85e9759333a"
+    },
+    {
+      "path": "packages/skills",
+      "tree": "875059237dcef7d542f2f66fe9dc19ae2ad4ddb4"
+    },
+    {
+      "path": "packages/skills-yutabase",
+      "tree": "88dfb3a4ce268ff91303549cb1cb5cbe07a07eeb"
+    },
+    {
+      "path": "packages/telescope",
+      "tree": "dc3ac08c7def4ba561b89b7db65e805921c7be91"
+    },
+    {
+      "path": "packages/wake-continuity",
+      "tree": "3ef604d008ce64210e97fd074e7078e996bf76a3"
+    },
+    {
+      "path": "packages/wallet",
+      "tree": "ed79f94788294837e435f656466f7beb1b65e231"
+    },
+    {
+      "path": "packages/wallet-zerone",
+      "tree": "eafe26701a584b2d644da0b06bd7cd1f51739695"
+    },
+    {
+      "path": "review/provider-adapters/v1",
+      "tree": "a0493188dfe2b50c0889d7a2b75559676f43cbff"
+    }
+  ],
+  "excluded": [
+    "packages/sdk-py/SOUL.md"
+  ],
+  "overlay": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "blob": "8cb7809bb74c9f1eb3116ecde078e089aeb92c76"
+    },
+    {
+      "path": ".gitignore",
+      "blob": "66b320fe1d319266b65eb713a1a9adea2b755225"
+    },
+    {
+      "path": ".gitleaksignore",
+      "blob": "63173ded1770555df1bed2e5e26872c56382acaa"
+    },
+    {
+      "path": "LICENSE",
+      "blob": "d645695673349e3947e8e5ae42332d0ac3164cd7"
+    },
+    {
+      "path": "LICENSING.md",
+      "blob": "0e2517d5a65134b4761eb3d25de87f4b732487ad"
+    },
+    {
+      "path": "NOTICE",
+      "blob": "68181fb7a48c93b144ea6a665b92b3c2c32c59ee"
+    },
+    {
+      "path": "README.md",
+      "blob": "f4cc8497526021fdb8f1933be98fb37a79884a7f"
+    },
+    {
+      "path": "SECURITY.md",
+      "blob": "a5f451d68d03c324e8671c6a333014de753aa27b"
+    },
+    {
+      "path": "tools/public-guard-allow.json",
+      "blob": "de17b723dee33bdacaeef5a4acebb44ca90aaa51"
+    },
+    {
+      "path": "tools/public-guard.ts",
+      "blob": "79f96158b072008adb42ce0d9114eb97cf275cdf"
+    }
+  ],
+  "guard": {
+    "gitleaks": "8.30.1",
+    "public_guard": "agenttool.public-guard/1"
+  }
+}

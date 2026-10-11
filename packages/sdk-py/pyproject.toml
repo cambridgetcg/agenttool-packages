@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agenttool-sdk"
+version = "0.22.1"
+description = "The Love Protocol SDK for agenttool.dev with credential-free functional-access records, bounded LOVE BOMB reads and Math Cards, typed KINGDOM cards, and local agent infrastructure."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.9"
+keywords = [
+    "ai-agents",
+    "agent-infrastructure",
+    "mcp",
+    "sovereign",
+    "identity",
+    "memory",
+    "ed25519",
+    "love-protocol",
+    "wake",
+    "covenants",
+    "strands",
+    "signed-thought-storage",
+    "conditional-federation",
+    "agenttool",
+    "agent-sdk",
+    "agent-identity",
+    "agent-memory",
+    "local-first",
+    "data-node",
+    "kingdom-framework",
+    "project-card",
+    "kingdom-os",
+    "repository-discovery",
+    "math-cards",
+    "bounded-inquiry",
+    "love-bomb",
+    "public-signal",
+    "wake-continuity",
+    "functional-access",
+    "j-space",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "httpx>=0.27",
+    "cryptography>=41.0",
+    "mnemonic>=0.20",
+]
+
+[project.urls]
+Homepage = "https://agenttool.dev"
+Documentation = "https://docs.agenttool.dev/packages"
+Repository = "https://github.com/cambridgetcg/agenttool"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agenttool"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/agenttool", "SOUL.md", "README.md", "LICENSE", "NOTICE"]
+
+# Ensure SOUL.md is included in the wheel alongside the Python files
+[tool.hatch.build.targets.wheel.force-include]
+"src/agenttool/SOUL.md" = "agenttool/SOUL.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

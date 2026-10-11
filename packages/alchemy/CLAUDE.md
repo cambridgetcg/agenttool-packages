@@ -1,0 +1,96 @@
+# `@agenttool/alchemy`
+
+Bounded, read-only Alchemy observation primitives plus pure provider-neutral
+EVM evidence contracts. This package owns neither credentials nor endpoint
+selection. It does not own hosted API routes, MCP, signing, simulation,
+broadcast, subscriptions, webhooks, provider administration, npm publication,
+or deployment.
+
+The current verified public developer preview is `0.1.0-dev.1`. Protected
+release run `32754993343` published its annotated tag from exact source
+`55aaf11a8f2a56841bcb87d6f7d8fa1034205646`; anonymous GitHub/npm readback
+matched SHA-256
+`1396d41bd3b22bf0e96d61bd36fa1a2afb7e3cff8fc5e20311c5117b0f7333c0`, and
+npm `next` resolves to dev.1 while mutable `latest` remains on dev.0. Verified
+public distribution creates no LOVE inventory entry, installs or registers no
+KINGDOM contract, and adds no hosted API, provider, or deployment authority.
+The immutable `0.1.0-dev.0` release receipt remains historical evidence in
+`docs/ALCHEMY.md` and must not be rewritten.
+
+## Commands
+
+```bash
+bun install --frozen-lockfile
+bun run ci
+npm pack --ignore-scripts --dry-run --json
+```
+
+## Invariants
+
+- Keep zero runtime dependencies and Node 20.19+/Bun 1.3.5+ compatibility.
+- Keep the underlying provider surface to the eight closed methods in
+  `AlchemyReadMethod`; the public client has separate initial-page and
+  continuation entrypoints for asset transfers. Never add `rawRpc`,
+  `request(method, params)`, model-supplied URLs, headers, credentials,
+  signing, broadcasting, retries, or provider-admin operations.
+- The injected transport receives only a fixed network identity, a closed
+  method/parameter tuple, CAIP-2 binding, and cancellation/deadline/byte
+  limits. It owns trusted endpoint mapping, credential injection, JSON-RPC
+  envelope/id generation and validation, bounded streaming, status/provider
+  error collapse, and returns only a parsed result rebound to the package
+  operation ID, method, and chain.
+- Validate public objects with exact key sets at runtime. Keep address, hash,
+  quantity, page, range, cursor, field, response, and deadline bounds explicit.
+- Bind every non-null result back to the request. A numbered block must have
+  the requested number; transaction and receipt hashes must match; every
+  transfer must satisfy the requested block, address, category, and
+  category-applicable contract filters. Fail closed on any mismatch.
+- Never receive or surface raw provider bodies, JSON-RPC messages/data, transport
+  exceptions, URLs, headers, or credentials in errors.
+- Preserve honest provenance. A configured chain ID is not endpoint proof;
+  provider `safe`/`finalized` tags are assertions; numbered blocks have unknown
+  finality; indexed transfers can lag.
+- `getAssetTransfersPage` and `getNextAssetTransfersPage` each make exactly one
+  provider call. Do not add automatic pagination, polling, subscriptions, or
+  retry. Never accept a raw provider `pageKey` from or return one to the
+  high-level client caller: continuation uses an opaque, module-realm-local
+  cursor bound to its normalized query, network, and issuing client. It is not
+  state-serializable, cross-client, or restartable, and has no readable
+  continuation fields. JSON serialization yields `{}` with no usable state.
+  Enforce Alchemy's documented ten-minute page-key TTL locally. The trusted
+  injected transport necessarily sees the provider key inside the closed
+  Alchemy request/result boundary; keep it confined to that boundary and
+  package internals. Keep provider-documented category/network restrictions
+  explicit; never turn unsupported coverage into an empty result.
+- The `agentcred.evm-jsonrpc-read/0.1` profile covers only the seven standard
+  `eth_*` methods, not `alchemy_getAssetTransfers`. The reference broker's
+  32 KiB maximum grant response is stricter than this package's 2 MiB ceiling,
+  and `callEvmJsonRpcRead` has no per-use signal/deadline argument. The package
+  can stop waiting while dispatched broker work and quota consumption continue.
+- Keep tests hermetic with fake transports. No provider credential, endpoint,
+  paid call, network call, signer, or wallet belongs in tests.
+- Keep the provider-neutral evidence formats pure and exact: CAIP-2 chain,
+  integer units, generation identity, categorical assertion/finality evidence,
+  canonical bytes/digests, partial-order finality axes, semantic transition
+  receipts, and atomic-unit measurement projections. Digests can be linkable;
+  none grants consensus, identity, consent, finality, permission, or authority.
+- Keep `src/evidence.ts`, the two schemas, the two fixtures, root exports,
+  packed-file inventory, Node/Bun smoke, and conformance tests aligned. The
+  JSON assets are packed evidence contracts, not generic JSON import subpaths.
+- Keep `kingdom.extension.json` declaration-only and `host_contract:
+  not_registered`. It may propose only the pure evidence/receipt/measurement
+  projections; it must not register or imply access to the injected-transport
+  read client, credentials, provider calls, persistence, wallet effects, or
+  authority.
+- Keep package version, exported `PACKAGE_VERSION`, transport protocol, tests,
+  docs, and any future immutable release inventory aligned.
+- External publication and deployment remain explicit operator actions.
+
+## Tests
+
+Cover every exact method/parameter tuple; fixed network mapping; normalized
+typed results; null and pending observations; indexed/live provenance;
+unknown-field rejection; address/hash/quantity/page/range/cursor bounds;
+response, code, and transaction-input sizes; abort/deadline behavior; chain-ID
+mismatch; provider/transport error sanitization; packed contents; and built
+Node import.
