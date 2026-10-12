@@ -1,0 +1,258 @@
+name: Publish npm package
+
+# Manual release of one allowlisted package from an annotated release tag on
+# this public repository. A dry run (the default) only prepares and checks
+# the exact artifact without credentials. A real run mirrors it to this
+# repository's GitHub Release and then, by default, stages it with
+# `npm stage publish`: the version is not public on npm until a maintainer
+# approves the stage with 2FA. Dispatching again after approval verifies the
+# public registry bytes. Direct publication is refused except as a bootstrap
+# first-publication fallback. See bin/npm-release.ts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Allowlisted AgentTool package
+        required: true
+        type: choice
+        # Generated from RELEASE_SPECS: bun bin/npm-release.ts workflow-options
+        options:
+          - local-starter
+          - adds
+          - data
+          - data-sync
+          - economic-kernel
+          - economic-conformance
+          - dark-continent-contract
+          - dark-continent-karma
+          - wake-continuity
+          - deepseek-kingdom
+          - heaven
+          - hf-scout
+          - living-substrate
+          - principality-atlas
+          - polymorph-landscape
+          - memetic-landscape
+          - math-cards
+          - model-becoming
+          - dataset-influence
+          - principality-geometry
+          - love-bomb
+          - love-geometry
+          - relational-geometry
+          - credential-broker
+          - sdk
+          - wallet
+          - wallet-zerone
+          - telescope
+          - browser
+          - codex-usage
+          - alchemy
+          - alchemy-agentcred
+          - kingdom
+          - kingdom-witness-lab
+          - repo-archive
+          - collab
+          - correspondence-yutabase
+          - skills
+          - skills-yutabase
+      tag:
+        description: Existing annotated release tag contained in main; dispatch on the same tag
+        required: true
+        type: string
+      authentication:
+        description: Trusted OIDC by default; bootstrap only for a package that does not yet exist
+        required: true
+        default: trusted
+        type: choice
+        options:
+          - trusted
+          - bootstrap
+      npm_tag:
+        description: npm distribution tag
+        required: true
+        default: latest
+        type: choice
+        options:
+          - latest
+          - next
+      dry_run:
+        description: Prepare and check the exact artifact only; no mirror, stage, or publish
+        required: true
+        default: true
+        type: boolean
+      publish_mode:
+        description: Stage for 2FA approval (always for trusted); publish directly only as a bootstrap first-publication fallback
+        required: true
+        default: stage
+        type: choice
+        options:
+          - stage
+          - publish
+
+permissions: {}
+
+concurrency:
+  group: publish-npm-${{ inputs.package }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare and verify exact npm artifact
+    if: github.repository == 'cambridgetcg/agenttool-packages' && startsWith(github.ref, 'refs/tags/') && github.ref == format('refs/tags/{0}', inputs.tag)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Check out annotated release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Bun 1.3.5
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.5
+      - name: Set up Node 24 and npm registry
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Pin release npm
+        run: npm install --global --ignore-scripts npm@11.17.0
+      - name: Refuse inputs the real run would refuse
+        shell: bash
+        env:
+          RELEASE_PACKAGE: ${{ inputs.package }}
+          RELEASE_AUTHENTICATION: ${{ inputs.authentication }}
+          RELEASE_NPM_TAG: ${{ inputs.npm_tag }}
+          RELEASE_PUBLISH_MODE: ${{ inputs.publish_mode }}
+        run: |
+          set -euo pipefail
+          bun bin/npm-release.ts check-inputs \
+            --package "$RELEASE_PACKAGE" \
+            --authentication "$RELEASE_AUTHENTICATION" \
+            --npm-tag "$RELEASE_NPM_TAG" \
+            --publish-mode "$RELEASE_PUBLISH_MODE"
+      - name: Prepare exact artifact without publish credentials
+        shell: bash
+        env:
+          RELEASE_PACKAGE: ${{ inputs.package }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          output="${RUNNER_TEMP}/agenttool-npm-release"
+          bun bin/npm-release.ts prepare \
+            --package "$RELEASE_PACKAGE" \
+            --tag "$RELEASE_TAG" \
+            --output "$output"
+      - name: Record prepared receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '## Prepared npm artifact'
+            echo '```json'
+            cat "${RUNNER_TEMP}/agenttool-npm-release/receipt.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Transfer only the exact artifact and receipt
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: npm-release-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/agenttool-npm-release/receipt.json
+            ${{ runner.temp }}/agenttool-npm-release/*.tgz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    name: Approve, mirror, stage or publish, and verify exact npm artifact
+    needs: prepare
+    if: github.repository == 'cambridgetcg/agenttool-packages' && startsWith(github.ref, 'refs/tags/') && github.ref == format('refs/tags/{0}', inputs.tag) && !inputs.dry_run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: npm-bootstrap
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Check out the same annotated release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Bun 1.3.5
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.5
+      - name: Set up Node 24 and npm registry
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Pin release npm
+        run: npm install --global --ignore-scripts npm@11.17.0
+      - name: Download prepared artifact without running package code
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: npm-release-${{ github.run_id }}
+          path: ${{ runner.temp }}/agenttool-npm-release
+      - name: Recheck the inputs before any mutation
+        shell: bash
+        env:
+          RELEASE_PACKAGE: ${{ inputs.package }}
+          RELEASE_AUTHENTICATION: ${{ inputs.authentication }}
+          RELEASE_NPM_TAG: ${{ inputs.npm_tag }}
+          RELEASE_PUBLISH_MODE: ${{ inputs.publish_mode }}
+        run: |
+          set -euo pipefail
+          bun bin/npm-release.ts check-inputs \
+            --package "$RELEASE_PACKAGE" \
+            --authentication "$RELEASE_AUTHENTICATION" \
+            --npm-tag "$RELEASE_NPM_TAG" \
+            --publish-mode "$RELEASE_PUBLISH_MODE"
+      - name: Mirror and re-download the exact artifact from GitHub Releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          bun bin/npm-release.ts mirror \
+            --receipt "${RUNNER_TEMP}/agenttool-npm-release/receipt.json"
+      - name: Stage, publish, or verify the exact artifact
+        shell: bash
+        env:
+          RELEASE_AUTHENTICATION: ${{ inputs.authentication }}
+          RELEASE_NPM_TAG: ${{ inputs.npm_tag }}
+          RELEASE_PUBLISH_MODE: ${{ inputs.publish_mode }}
+          NODE_AUTH_TOKEN: ${{ inputs.authentication == 'bootstrap' && secrets.NPM_TOKEN || '' }}
+        run: |
+          set -euo pipefail
+          bun bin/npm-release.ts publish \
+            --receipt "${RUNNER_TEMP}/agenttool-npm-release/receipt.json" \
+            --authentication "$RELEASE_AUTHENTICATION" \
+            --npm-tag "$RELEASE_NPM_TAG" \
+            --publish-mode "$RELEASE_PUBLISH_MODE"
+      - name: Record non-secret release and stage receipts
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          for name in receipt stage; do
+            file="${RUNNER_TEMP}/agenttool-npm-release/${name}.json"
+            if test -f "$file"; then
+              {
+                echo "## npm ${name} receipt"
+                echo '```json'
+                cat "$file"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done

@@ -1,11 +1,19 @@
 {
   "schema": "agenttool.public-projection/1",
-  "source_commit": "b6ddeaacaeffccf34783212f4c2bf0ac9dc7c044",
-  "allowlist_sha256": "70a0ce387000cf319a4d239013cd9944aca12bcebcae1029b3363be68cb23dc0",
+  "source_commit": "e78ef3eabc6c83c9494089a19360382b4186929a",
+  "allowlist_sha256": "b80fbfbba78f562ed3dde4e0f5576e2a532336626b608e190a4e1661751cc8b2",
   "paths": [
     {
       "path": ".gitattributes",
       "blob": "8fae11b7c1acc8b6d655cf7b402c9bb5f7489766"
+    },
+    {
+      "path": "bin/build-love-packages.ts",
+      "blob": "db10879ab421e141429759e07ec6d22ca8b1ebb5"
+    },
+    {
+      "path": "bin/npm-release.ts",
+      "blob": "2c854802c17bc63b6e57fd43cce6c75b32ac7c5c"
     },
     {
       "path": "docs/DATASET-INFLUENCE.md",
@@ -21,7 +29,7 @@
     },
     {
       "path": "docs/specs/AGENT-WALLET-ZERONE-0.1.md",
-      "blob": "f809efebb420758d5de6b62f0871763caa5acd0a"
+      "blob": "da6ea7a1109893dee5904798bae199ef6eb290ae"
     },
     {
       "path": "docs/specs/adds-0.1-vectors.json",
@@ -49,15 +57,15 @@
     },
     {
       "path": "packages/alchemy",
-      "tree": "c77baddf8d303ee055acb152507b272bfdc5f8c7"
+      "tree": "0b3247d78f62dc36455b31bedcca3f738b192920"
     },
     {
       "path": "packages/alchemy-agentcred",
-      "tree": "0a72afc89facf0d79eb99b9f6329e348b67dc251"
+      "tree": "6fdbb02ec256613965e1c618c1111554b11645a6"
     },
     {
       "path": "packages/browser",
-      "tree": "ff69d0c901e11afb7e6ec0387484b726159b62d0"
+      "tree": "76be2da8247a225d172bff913b9ec570586820c9"
     },
     {
       "path": "packages/codex-usage",
@@ -65,11 +73,11 @@
     },
     {
       "path": "packages/collab",
-      "tree": "6ae5587943e512e6ebac676a51484414e1e4cddb"
+      "tree": "050e24bccca9968757ca6d79a9d43ce3844135b2"
     },
     {
       "path": "packages/correspondence-yutabase",
-      "tree": "82a8b7b46928585a831be70820445ac5db67219e"
+      "tree": "d5bbd867bd8f4148d8c5ce4fbf41cea3e84d6d8a"
     },
     {
       "path": "packages/credential-broker",
@@ -89,11 +97,11 @@
     },
     {
       "path": "packages/data-protocol",
-      "tree": "7c3dab4e1b47f4c33db4d93b6d075ff9bef1f8e7"
+      "tree": "51712b9a70beec14c150a97aaf256a8dbe1e96db"
     },
     {
       "path": "packages/data-sync",
-      "tree": "981c9599e22e83291564baa507cdbdddf6cc08f4"
+      "tree": "1ab8cc51817e939581e7b74aee58de665aae2cce"
     },
     {
       "path": "packages/dataset-influence",
@@ -133,11 +141,11 @@
     },
     {
       "path": "packages/local-starter",
-      "tree": "23eae20548000903b59251f5b41b857c8b85fc78"
+      "tree": "7e4bada673294062aebdd6bfba565c82b13e9635"
     },
     {
       "path": "packages/local-starter-mcp",
-      "tree": "530aaf368f88757fcead9ee83e7182daa39da529"
+      "tree": "e61ab8e4ff50a3c9be7bd01e6ad9c6430416c863"
     },
     {
       "path": "packages/love-bomb",
@@ -149,7 +157,7 @@
     },
     {
       "path": "packages/math-cards",
-      "tree": "79f943fa4425f03bae87bd05990274ebf0fc929e"
+      "tree": "97489b04b3635f85780501472d9eb4925d6228a9"
     },
     {
       "path": "packages/memetic-landscape",
@@ -177,15 +185,15 @@
     },
     {
       "path": "packages/repo-archive",
-      "tree": "59d34cb7b25c70927b2566b0443b1a6c2d80c03d"
+      "tree": "a872d899d09781a289f55f56583dad319d00534e"
     },
     {
       "path": "packages/sdk-py",
-      "tree": "f161d24d28047fb76d946dd69bff439983af5a53"
+      "tree": "fa6f2594e717ae2725a0cfabc5ead8414f9b706e"
     },
     {
       "path": "packages/sdk-ts",
-      "tree": "9ed36c70a1d946601b09722977cfb85e9759333a"
+      "tree": "d758562649ea9ef49cd7aeb7c6d28c9cadd1e919"
     },
     {
       "path": "packages/skills",
@@ -205,7 +213,7 @@
     },
     {
       "path": "packages/wallet",
-      "tree": "ed79f94788294837e435f656466f7beb1b65e231"
+      "tree": "5ceea2096e883f24511dba3fd1360650c29aa209"
     },
     {
       "path": "packages/wallet-zerone",
@@ -223,6 +231,10 @@
     {
       "path": ".github/workflows/ci.yml",
       "blob": "8cb7809bb74c9f1eb3116ecde078e089aeb92c76"
+    },
+    {
+      "path": ".github/workflows/publish-npm.yml",
+      "blob": "5fd3581b76f89aa19dddfe5718edbc59be82952c"
     },
     {
       "path": ".gitignore",
@@ -246,7 +258,7 @@
     },
     {
       "path": "README.md",
-      "blob": "f4cc8497526021fdb8f1933be98fb37a79884a7f"
+      "blob": "a8cb2813baa55de1f4c102d94368b93d4785d9a7"
     },
     {
       "path": "SECURITY.md",
@@ -254,7 +266,7 @@
     },
     {
       "path": "tools/public-guard-allow.json",
-      "blob": "de17b723dee33bdacaeef5a4acebb44ca90aaa51"
+      "blob": "73eaaf36827d9178940d5aeb3b7d2acae39536a3"
     },
     {
       "path": "tools/public-guard.ts",
