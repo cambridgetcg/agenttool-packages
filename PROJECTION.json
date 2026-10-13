@@ -1,7 +1,7 @@
 {
   "schema": "agenttool.public-projection/1",
-  "source_commit": "e78ef3eabc6c83c9494089a19360382b4186929a",
-  "allowlist_sha256": "b80fbfbba78f562ed3dde4e0f5576e2a532336626b608e190a4e1661751cc8b2",
+  "source_commit": "42ae9148b9c04d1ec6b376eb277f7fa7be058a68",
+  "allowlist_sha256": "7d28a70772710e3126c612f9d5c6f740cb818d81b8745f2be83b079e08e79fe1",
   "paths": [
     {
       "path": ".gitattributes",
@@ -9,7 +9,7 @@
     },
     {
       "path": "bin/build-love-packages.ts",
-      "blob": "db10879ab421e141429759e07ec6d22ca8b1ebb5"
+      "blob": "7098aae6a1a9dfc00bb245ee791ca683a0e9298d"
     },
     {
       "path": "bin/npm-release.ts",
@@ -141,11 +141,11 @@
     },
     {
       "path": "packages/local-starter",
-      "tree": "7e4bada673294062aebdd6bfba565c82b13e9635"
+      "tree": "0c0a2c26c1530e016c17d7294f4955c24d512353"
     },
     {
       "path": "packages/local-starter-mcp",
-      "tree": "e61ab8e4ff50a3c9be7bd01e6ad9c6430416c863"
+      "tree": "a512b81512f6eeb252da3721b1bdffc5768d2d87"
     },
     {
       "path": "packages/love-bomb",
@@ -189,11 +189,11 @@
     },
     {
       "path": "packages/sdk-py",
-      "tree": "fa6f2594e717ae2725a0cfabc5ead8414f9b706e"
+      "tree": "ed3b459239fcafabb3b5e7a3bf21968408afb933"
     },
     {
       "path": "packages/sdk-ts",
-      "tree": "d758562649ea9ef49cd7aeb7c6d28c9cadd1e919"
+      "tree": "93f1f43e5a8d042b2945182c5a3cb37318f03fcc"
     },
     {
       "path": "packages/skills",
@@ -224,9 +224,7 @@
       "tree": "a0493188dfe2b50c0889d7a2b75559676f43cbff"
     }
   ],
-  "excluded": [
-    "packages/sdk-py/SOUL.md"
-  ],
+  "excluded": [],
   "overlay": [
     {
       "path": ".github/workflows/ci.yml",
@@ -258,7 +256,7 @@
     },
     {
       "path": "README.md",
-      "blob": "a8cb2813baa55de1f4c102d94368b93d4785d9a7"
+      "blob": "d3fdfd662708212a774a4ef76bedee5590e21742"
     },
     {
       "path": "SECURITY.md",
