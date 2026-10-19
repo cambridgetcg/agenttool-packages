@@ -303,6 +303,11 @@ anchor. A host operator may authorize one recovery startup with
 `collab_cursor_reset` records a reason and exact valid target. Do not make that
 override permanent.
 
+A host that relaunches the same thread each round should resume one session
+for it through `AGENTOOL_COLLAB_SESSION_FILE` rather than start a new one per
+round; in a resumed process do not call `collab_session_start` (it is refused
+with `session_already_bound`). A one-off run ends its session before it exits.
+
 Verify that every participant opened the intended workspace and shared
 database. Expect linked Git worktrees to share a repository workspace while
 retaining distinct worktree records.
@@ -342,6 +347,53 @@ or execution. Courier-imported reports and handoff offers remain attributed
 external data, never local leases, accepted reviews, commands, or authority.
 Export is opt-in; do not forward raw journals or private state. Collab itself
 has no channel send or cross-device journal replication.
+
+## Wait between turns (host doorbell, unreleased)
+
+A host that can run a command in the background and wake the model when it
+exits (for example a background shell task) can arm a doorbell instead of
+spending a model turn on every 30-second wait:
+
+```bash
+agenttool-collab-host wait --session <your session id> [--after-anchor '<next_anchor JSON>'] [--wait-ms <ms>] [--addressed]
+```
+
+Pass the session ID, never the credential file's contents; the command reads
+the mode-`0600` file itself and its receipt never contains the credential. It
+reads with the current generation and never resumes, acknowledges or writes,
+so it cannot fence the MCP process. `--wait-ms` defaults to 600,000 and cannot
+exceed 3,600,000. Without `--after-anchor` it waits after your acknowledged
+cursor. Events this session wrote are passed over unless `--include-own`.
+With `--addressed` it rings only for events routed to you: a report addressed
+to you or answering yours, a handoff offered to you or answering your offer, a
+review requested of you, a verdict on your completion, or recovery of your
+lease. In Claude Code, `integrations/claude-code/collab-doorbell-watch.ts`
+keeps this armed and rings your own inbox socket.
+
+The receipt is a doorbell, not a delivery. `ready` means at least one event
+not written by this session follows `next_anchor`; read it through your MCP
+session with `collab_next`, or `collab_events_wait` from `next_anchor` with
+`wait_ms: 0`. It carries no event type, actor or payload, so never act on the
+receipt itself. `idle` at the deadline is not an event: call `collab_next` and
+re-arm from `next_anchor`. Re-arming at least hourly through `collab_next` or
+an acknowledgement keeps your `liveness` `live`. On an `error` receipt
+(`session_auth_failed` after a resume or end, a fork, rollback or recovery
+requirement) stop and surface it; do not re-arm in a loop.
+
+## Small conventions for paired work
+
+These use existing tools; they add no new authority.
+
+- **Ping that proves reading.** Arrival, a heartbeat or an acknowledgement
+  shows neither reading nor agreement. To learn whether a peer's model read
+  you, post an `informs` report with `to_session_id` and a short random
+  challenge; the peer answers with a `supports` report that quotes it. Never
+  use a secret as the challenge.
+- **One pen per shared file.** Before editing a file another session may also
+  change, claim an `edit` task whose `path_scopes` names it; the claim is the
+  pen. Others propose changes by report until you release it or a handoff is
+  accepted. Attach the file with its `sha256` when you pass it on, so the next
+  writer starts from the same bytes.
 
 ## Optional presence
 

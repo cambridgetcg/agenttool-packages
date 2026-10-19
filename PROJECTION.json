@@ -1,6 +1,6 @@
 {
   "schema": "agenttool.public-projection/1",
-  "source_commit": "42ae9148b9c04d1ec6b376eb277f7fa7be058a68",
+  "source_commit": "7fde5516f1c5b3dcda40c0c3175fca109f22bbb4",
   "allowlist_sha256": "7d28a70772710e3126c612f9d5c6f740cb818d81b8745f2be83b079e08e79fe1",
   "paths": [
     {
@@ -13,7 +13,7 @@
     },
     {
       "path": "bin/npm-release.ts",
-      "blob": "2c854802c17bc63b6e57fd43cce6c75b32ac7c5c"
+      "blob": "2e0f276388d385e4701fc0fa3127fb923e057e90"
     },
     {
       "path": "docs/DATASET-INFLUENCE.md",
@@ -29,7 +29,7 @@
     },
     {
       "path": "docs/specs/AGENT-WALLET-ZERONE-0.1.md",
-      "blob": "da6ea7a1109893dee5904798bae199ef6eb290ae"
+      "blob": "c522091c92c1c3fcac5219c2fefdf9dae737fafe"
     },
     {
       "path": "docs/specs/adds-0.1-vectors.json",
@@ -57,11 +57,11 @@
     },
     {
       "path": "packages/alchemy",
-      "tree": "0b3247d78f62dc36455b31bedcca3f738b192920"
+      "tree": "a222cdffdd18e90e01e9241d424480703943887b"
     },
     {
       "path": "packages/alchemy-agentcred",
-      "tree": "6fdbb02ec256613965e1c618c1111554b11645a6"
+      "tree": "57dbfcf717006a6578acaf8fc477ebf195545044"
     },
     {
       "path": "packages/browser",
@@ -73,7 +73,7 @@
     },
     {
       "path": "packages/collab",
-      "tree": "050e24bccca9968757ca6d79a9d43ce3844135b2"
+      "tree": "a35eb2fd20d1e8faaf9837f403ea7c10d429d437"
     },
     {
       "path": "packages/correspondence-yutabase",
@@ -141,7 +141,7 @@
     },
     {
       "path": "packages/local-starter",
-      "tree": "0c0a2c26c1530e016c17d7294f4955c24d512353"
+      "tree": "310cff98472337dfca226864ed606e73e79299e6"
     },
     {
       "path": "packages/local-starter-mcp",
@@ -181,7 +181,7 @@
     },
     {
       "path": "packages/relational-geometry",
-      "tree": "5203fb0afc43d3b3c505ed16c25a69a8c45a8d83"
+      "tree": "d2e577a0c2abd0d0690d8a634aea258b0e4e94dd"
     },
     {
       "path": "packages/repo-archive",
@@ -189,11 +189,11 @@
     },
     {
       "path": "packages/sdk-py",
-      "tree": "ed3b459239fcafabb3b5e7a3bf21968408afb933"
+      "tree": "027931260fb2e3f992524acdac7b4f6132373a1a"
     },
     {
       "path": "packages/sdk-ts",
-      "tree": "93f1f43e5a8d042b2945182c5a3cb37318f03fcc"
+      "tree": "009e82fbb909a7f91885da68104b30f2befec668"
     },
     {
       "path": "packages/skills",
@@ -213,15 +213,15 @@
     },
     {
       "path": "packages/wallet",
-      "tree": "5ceea2096e883f24511dba3fd1360650c29aa209"
+      "tree": "dfc54f5a6e8ff5e4eb091e5ee30c2ff73a847f64"
     },
     {
       "path": "packages/wallet-zerone",
-      "tree": "eafe26701a584b2d644da0b06bd7cd1f51739695"
+      "tree": "fa456c9ebcfeb6aec20b72c59558e0f66c05b885"
     },
     {
       "path": "review/provider-adapters/v1",
-      "tree": "a0493188dfe2b50c0889d7a2b75559676f43cbff"
+      "tree": "3bdb74f5e319906dc7a257338ae9b04bf1d1a525"
     }
   ],
   "excluded": [],
@@ -240,7 +240,7 @@
     },
     {
       "path": ".gitleaksignore",
-      "blob": "63173ded1770555df1bed2e5e26872c56382acaa"
+      "blob": "3d1e823bd26d148f5b22dd5f95cf5314bcad41ab"
     },
     {
       "path": "LICENSE",

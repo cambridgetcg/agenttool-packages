@@ -3,8 +3,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { defaultDatabasePath, resolveDatabasePath } from "../src/database-path.js";
-import { runCollabHostCli } from "../src/host.js";
-import type { SessionHandle } from "../src/protocol.js";
+import { MAX_HOST_WAIT_MS, runCollabHostCli, waitForSessionEvents } from "../src/host.js";
+import type { EventCursor, SessionHandle } from "../src/protocol.js";
 import { writeSessionCredentialFile } from "../src/session-file.js";
 import { CollabStore } from "../src/store.js";
 
@@ -216,7 +216,9 @@ describe("agenttool-collab-host end", () => {
       expect(JSON.parse(run.line)).toEqual({
         protocol: "agenttool.collab-host/1",
         status: "help",
-        usage: "usage: agenttool-collab-host end --session-file <path> --reason <text> [--release-leases] [--db <path>]",
+        usage: "usage: agenttool-collab-host end --session-file <path> --reason <text> [--release-leases] [--db <path>]"
+          + " | agenttool-collab-host wait (--session <id> | --session-file <path>) [--after-anchor <json>]"
+          + " [--wait-ms <ms>] [--include-own] [--addressed] [--db <path>]",
       });
     }
   });
@@ -387,6 +389,295 @@ describe("agenttool-collab-host end", () => {
 
     expect(existsSync(file)).toBe(true);
     expect(store.getCoordinationSession(handle.session.id)?.status).toBe("active");
+  });
+});
+
+function headAnchor(workspaceId: string): EventCursor {
+  const workspace = store.getWorkspace(workspaceId)!;
+  return { epoch_id: workspace.epoch_id, sequence: workspace.event_head_sequence, hash: workspace.event_head_hash };
+}
+
+function runHostAsync(args: string[]) {
+  const child = Bun.spawn([process.execPath, hostEntry, ...args], {
+    cwd: packageRoot,
+    env: { PATH: process.env.PATH ?? "", TMPDIR: tmpdir(), HOME: join(directory, "home") },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return {
+    child,
+    receipt: (async () => {
+      const exitCode = await child.exited;
+      const stdout = await new Response(child.stdout).text();
+      return { exitCode, stdout, receipt: JSON.parse(stdout.split("\n")[0] ?? "null") as Record<string, any> };
+    })(),
+  };
+}
+
+describe("agenttool-collab-host wait", () => {
+  test("rings for another session's event, carries no event content, and writes nothing", () => {
+    const { handle } = startWithCredentialFile("doorbell-listener");
+    const anchor = headAnchor(handle.workspace.id);
+    const peer = store.startSession({ root_path: root, actor: "doorbell-peer-actor" });
+    store.appendReportForSession({
+      ...peer.credential,
+      idempotency_key: "doorbell-peer-report",
+      kind: "observation",
+      body: "doorbell-private-body-marker",
+    });
+    const before = sessionRow(handle.session.id);
+    const head = headAnchor(handle.workspace.id);
+
+    const run = runHost([
+      "wait", "--session", handle.session.id, "--after-anchor", JSON.stringify(anchor),
+      "--wait-ms", "0", "--db", databasePath,
+    ]);
+
+    expect(run.exitCode).toBe(0);
+    expect(run.lines).toHaveLength(1);
+    expect(run.receipt).toEqual({
+      protocol: "agenttool.collab-host/1",
+      status: "ready",
+      session_id: handle.session.id,
+      workspace_id: handle.workspace.id,
+      after_anchor: anchor,
+      next_anchor: anchor,
+      head_sequence: head.sequence,
+      skipped_own_events: 0,
+      waited_ms: expect.any(Number),
+    });
+    for (const hidden of [
+      handle.credential.session_token,
+      "doorbell-private-body-marker",
+      "doorbell-peer-actor",
+      peer.session.id,
+    ]) {
+      expect(run.stdout).not.toContain(hidden);
+    }
+    expect(sessionRow(handle.session.id)).toEqual(before);
+    expect(headAnchor(handle.workspace.id)).toEqual(head);
+  });
+
+  test("passes over its own events from the acknowledged cursor and re-arms from next_anchor", () => {
+    const { handle, file } = startWithCredentialFile("doorbell-self");
+    // workspace.opened carries no session, so acknowledge past it first.
+    store.acknowledgeSessionCursor({
+      ...handle.credential,
+      anchor: headAnchor(handle.workspace.id),
+      expected_cursor_version: handle.session.cursor_version,
+    });
+    store.appendReportForSession({
+      ...handle.credential,
+      idempotency_key: "doorbell-own-report",
+      kind: "observation",
+      body: "own note",
+    });
+    const head = headAnchor(handle.workspace.id);
+
+    const idle = runHost(["wait", "--session-file", file, "--wait-ms", "0", "--db", databasePath]);
+    expect(idle.exitCode).toBe(0);
+    expect(idle.receipt).toMatchObject({
+      status: "idle",
+      after_anchor: store.getCoordinationSession(handle.session.id)!.cursor,
+      next_anchor: head,
+      head_sequence: head.sequence,
+    });
+    expect(idle.receipt.skipped_own_events).toBeGreaterThanOrEqual(1);
+
+    const own = runHost([
+      "wait", "--session-file", file, "--wait-ms", "0", "--include-own", "--db", databasePath,
+    ]);
+    expect(own.receipt).toMatchObject({ status: "ready", skipped_own_events: 0 });
+
+    const rearmed = runHost([
+      "wait", "--session-file", file, "--after-anchor", JSON.stringify(idle.receipt.next_anchor),
+      "--wait-ms", "0", "--db", databasePath,
+    ]);
+    expect(rearmed.receipt).toMatchObject({ status: "idle", skipped_own_events: 0, next_anchor: head });
+  });
+
+  test("returns as soon as an event lands during the wait", async () => {
+    const { handle } = startWithCredentialFile("doorbell-patient");
+    const anchor = headAnchor(handle.workspace.id);
+    const pending = runHostAsync([
+      "wait", "--session", handle.session.id, "--after-anchor", JSON.stringify(anchor),
+      "--wait-ms", "20000", "--db", databasePath,
+    ]);
+    await Bun.sleep(400);
+    store.startSession({ root_path: root, actor: "doorbell-late-peer" });
+    const done = await pending.receipt;
+    expect(done.exitCode).toBe(0);
+    expect(done.receipt).toMatchObject({ status: "ready", next_anchor: anchor });
+    expect(done.receipt.waited_ms).toBeLessThan(20000);
+  });
+
+  test("polls on the host clock and reports idle at its deadline", () => {
+    const { handle } = startWithCredentialFile("doorbell-clock");
+    let now = 0;
+    const sleeps: number[] = [];
+    const receipt = waitForSessionEvents(store, handle.credential, {
+      after_anchor: headAnchor(handle.workspace.id),
+      wait_ms: 1_000,
+      include_own: false,
+    }, { now: () => now, sleep: (ms) => { sleeps.push(ms); now += ms; } });
+    expect(receipt).toMatchObject({ status: "idle", waited_ms: 1_000 });
+    expect(sleeps).toEqual([250, 250, 250, 250]);
+  });
+
+  test("fails closed on a forked anchor, a superseded generation, and an ended session without fencing", () => {
+    const { handle, file } = startWithCredentialFile("doorbell-fenced");
+    const anchor = headAnchor(handle.workspace.id);
+    const forked = runHost([
+      "wait", "--session-file", file, "--after-anchor",
+      JSON.stringify({ ...anchor, hash: "0".repeat(64) }), "--wait-ms", "0", "--db", databasePath,
+    ]);
+    expect(forked.exitCode).toBe(1);
+    expect(forked.receipt).toMatchObject({ status: "error", error: "cursor_fork_detected" });
+    expect(sessionRow(handle.session.id).generation).toBe(handle.credential.generation);
+
+    const resumed = store.resumeSession(handle.credential);
+    const superseded = runHost(["wait", "--session-file", file, "--wait-ms", "0", "--db", databasePath]);
+    expect(superseded.receipt).toMatchObject({ status: "error", error: "session_auth_failed" });
+    expect(sessionRow(handle.session.id).generation).toBe(resumed.credential.generation);
+
+    const other = startWithCredentialFile("doorbell-ended");
+    store.endSessionWithReleases({ ...other.handle.credential, reason: "done", release_leases: false });
+    const ended = runHost(["wait", "--session-file", other.file, "--wait-ms", "0", "--db", databasePath]);
+    expect(ended.receipt).toMatchObject({ status: "error", error: "session_auth_failed" });
+    for (const run of [forked, superseded, ended]) {
+      expect(run.stdout).not.toContain(handle.credential.session_token);
+      expect(run.stdout).not.toContain(other.handle.credential.session_token);
+    }
+  });
+
+  test("refuses malformed or foreign arguments before reading any credential", () => {
+    const { handle, file } = startWithCredentialFile("doorbell-usage");
+    const id = handle.session.id;
+    for (const args of [
+      ["wait"],
+      ["wait", "--session", id, "--session-file", file],
+      ["wait", "--session", ""],
+      ["wait", "--session", id, "--wait-ms", String(MAX_HOST_WAIT_MS + 1)],
+      ["wait", "--session", id, "--wait-ms", "-1"],
+      ["wait", "--session", id, "--wait-ms", "1.5"],
+      ["wait", "--session", id, "--wait-ms", "soon"],
+      ["wait", "--session", id, "--after-anchor", "{"],
+      ["wait", "--session", id, "--after-anchor", JSON.stringify({ epoch_id: "e", sequence: 1 })],
+      ["wait", "--session", id, "--after-anchor", JSON.stringify({ epoch_id: "e", sequence: -1, hash: "h" })],
+      ["wait", "--session", id, "--after-anchor", JSON.stringify({ epoch_id: "e", sequence: 1, hash: "h", x: 1 })],
+      ["wait", "--session", id, "--reason", "not for wait"],
+      ["wait", "--session", id, "--release-leases"],
+      ["end", "--session-file", file, "--reason", "x", "--wait-ms", "0"],
+      ["end", "--session-file", file, "--reason", "x", "--include-own"],
+      ["end", "--session-file", file, "--reason", "x", "--addressed"],
+    ]) {
+      const refused = runHost(args, { AGENTOOL_COLLAB_DB: databasePath });
+      expect(refused.exitCode).toBe(1);
+      expect(refused.lines).toHaveLength(1);
+      expect(refused.receipt).toMatchObject({ status: "error", error: "usage_error" });
+    }
+    expect(store.getCoordinationSession(id)?.status).toBe("active");
+    expect(existsSync(file)).toBe(true);
+  });
+});
+
+describe("addressed doorbell", () => {
+  test("names the sessions an event is routed to, from routing fields only", () => {
+    const a = startWithCredentialFile("addressed-a").handle;
+    const b = store.startSession({ root_path: root, actor: "addressed-b" });
+    const events = () => store.eventsSince(a.workspace.id, 0, 500).events;
+    const lastOf = (type: string) => events().filter((event) => event.type === type).at(-1)!;
+    const routes = (type: string) => ({
+      a: store.eventAddressesSession(lastOf(type), a.session.id),
+      b: store.eventAddressesSession(lastOf(type), b.session.id),
+    });
+
+    store.appendReportForSession({
+      ...b.credential, idempotency_key: "plain", kind: "observation", body: "for everyone",
+    });
+    expect(routes("report.posted")).toEqual({ a: false, b: false });
+    store.appendReportForSession({
+      ...b.credential, idempotency_key: "to-a", kind: "observation", body: "for a",
+      to_session_id: a.session.id,
+    });
+    expect(routes("report.posted")).toEqual({ a: true, b: false });
+    const proposal = store.appendReportForSession({
+      ...a.credential, idempotency_key: "a-proposes", kind: "proposal", body: "a proposes",
+    });
+    store.appendReportForSession({
+      ...b.credential, idempotency_key: "b-supports", kind: "observation", body: "agreed",
+      relation: "supports", target_report_id: proposal.id,
+    });
+    expect(routes("report.posted")).toEqual({ a: true, b: false });
+
+    const handoffTask = store.createTaskForSession({
+      ...b.credential, idempotency_key: "handoff-create", title: "handoff", work_mode: "coordination",
+    });
+    const held = store.claimTaskForSession({
+      ...b.credential, idempotency_key: "handoff-claim", task_id: handoffTask.id,
+      expected_version: handoffTask.version, ttl_seconds: 3600,
+    });
+    const offer = store.offerHandoffForSession({
+      ...b.credential, idempotency_key: "handoff-offer", task_id: held.id, lease_id: held.lease_id!,
+      expected_version: held.version, to_session_id: a.session.id, summary: "take it",
+    });
+    expect(routes("handoff.offered")).toEqual({ a: true, b: false });
+    store.respondHandoffForSession({
+      ...a.credential, idempotency_key: "handoff-decline", handoff_id: offer.handoff.id,
+      expected_version: offer.task.version, response: "decline",
+    });
+    expect(routes("handoff.declined")).toEqual({ a: false, b: true });
+
+    const reviewTask = store.createTaskForSession({
+      ...b.credential, idempotency_key: "review-create", title: "review", work_mode: "coordination",
+      completion_policy: "accepted",
+    });
+    const claimed = store.claimTaskForSession({
+      ...b.credential, idempotency_key: "review-claim", task_id: reviewTask.id,
+      expected_version: reviewTask.version, ttl_seconds: 3600,
+    });
+    const reported = store.completeTaskForSession({
+      ...b.credential, idempotency_key: "review-complete", task_id: claimed.id, lease_id: claimed.lease_id!,
+      expected_version: claimed.version, summary: "done", review_requested_session_id: a.session.id,
+    });
+    expect(routes("task.reported_complete")).toEqual({ a: true, b: false });
+    store.reviewTaskForSession({
+      ...a.credential, idempotency_key: "review-accept", task_id: reported.id,
+      expected_version: reported.version, outcome: "accept", summary: "accepted",
+    });
+    expect(routes("task.accepted")).toEqual({ a: false, b: true });
+    expect(routes("session.joined")).toEqual({ a: false, b: false });
+  });
+
+  test("with --addressed the doorbell passes over unaddressed events and rings for its own mail", () => {
+    const { handle } = startWithCredentialFile("addressed-listener");
+    const peer = store.startSession({ root_path: root, actor: "addressed-peer" });
+    const anchor = headAnchor(handle.workspace.id);
+    store.appendReportForSession({
+      ...peer.credential, idempotency_key: "noise", kind: "observation", body: "general chatter",
+    });
+    const args = (after: EventCursor) => [
+      "wait", "--session", handle.session.id, "--after-anchor", JSON.stringify(after),
+      "--wait-ms", "0", "--db", databasePath,
+    ];
+
+    const quiet = runHost([...args(anchor), "--addressed"]);
+    expect(quiet.receipt).toMatchObject({
+      status: "idle", skipped_own_events: 0, skipped_unaddressed_events: 1,
+      next_anchor: headAnchor(handle.workspace.id),
+    });
+    expect(runHost(args(anchor)).receipt).toMatchObject({ status: "ready", next_anchor: anchor });
+    expect(runHost(args(anchor)).receipt).not.toHaveProperty("skipped_unaddressed_events");
+
+    store.appendReportForSession({
+      ...peer.credential, idempotency_key: "mail", kind: "observation",
+      body: "addressed-private-body-marker", to_session_id: handle.session.id,
+    });
+    const mail = runHost([...args(quiet.receipt.next_anchor), "--addressed"]);
+    expect(mail.receipt).toMatchObject({
+      status: "ready", next_anchor: quiet.receipt.next_anchor, skipped_unaddressed_events: 0,
+    });
+    expect(mail.stdout).not.toContain("addressed-private-body-marker");
   });
 });
 
