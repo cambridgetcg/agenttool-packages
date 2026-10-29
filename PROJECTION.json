@@ -1,6 +1,6 @@
 {
   "schema": "agenttool.public-projection/1",
-  "source_commit": "7fde5516f1c5b3dcda40c0c3175fca109f22bbb4",
+  "source_commit": "8518c4e7657d3c9e9c8457ee36cf136658d2f588",
   "allowlist_sha256": "7d28a70772710e3126c612f9d5c6f740cb818d81b8745f2be83b079e08e79fe1",
   "paths": [
     {
@@ -13,7 +13,7 @@
     },
     {
       "path": "bin/npm-release.ts",
-      "blob": "2e0f276388d385e4701fc0fa3127fb923e057e90"
+      "blob": "b282b00a62459191bcba95c733ceef0255390d3e"
     },
     {
       "path": "docs/DATASET-INFLUENCE.md",
@@ -49,7 +49,7 @@
     },
     {
       "path": "docs/specs/behaviour-conformance.json",
-      "blob": "70a3da30c2f9f94e7137afd3147ea71df6d0b46d"
+      "blob": "7caf49171095426548c053b2485b9163131f23cb"
     },
     {
       "path": "docs/specs/canonical-bytes-vectors.json",
@@ -57,27 +57,27 @@
     },
     {
       "path": "packages/alchemy",
-      "tree": "a222cdffdd18e90e01e9241d424480703943887b"
+      "tree": "1c782e524042bda19d677429a88e74648f1356d0"
     },
     {
       "path": "packages/alchemy-agentcred",
-      "tree": "57dbfcf717006a6578acaf8fc477ebf195545044"
+      "tree": "cb42258773694117fb5c8d355c1e87381690447e"
     },
     {
       "path": "packages/browser",
-      "tree": "76be2da8247a225d172bff913b9ec570586820c9"
+      "tree": "d233593ef7aacfdc5c1bc9f5d3426f8c02ef3263"
     },
     {
       "path": "packages/codex-usage",
-      "tree": "060165fb79d005bab3d9b27651ce30e2e9386597"
+      "tree": "c61c660e4fbed8776ea0074e316cda8ee6c32eae"
     },
     {
       "path": "packages/collab",
-      "tree": "a35eb2fd20d1e8faaf9837f403ea7c10d429d437"
+      "tree": "99e8062c41254c873007387ff35b2b4fa526e470"
     },
     {
       "path": "packages/correspondence-yutabase",
-      "tree": "d5bbd867bd8f4148d8c5ce4fbf41cea3e84d6d8a"
+      "tree": "6dc48cc451879070443f9c0fc4fb927f6cbadb82"
     },
     {
       "path": "packages/credential-broker",
@@ -85,15 +85,15 @@
     },
     {
       "path": "packages/dark-continent-contract",
-      "tree": "d862d08e2d636e8c8a63c99384318b92e1681019"
+      "tree": "db11e4a3b9d8a69e88f78d181d396da0d1d970d9"
     },
     {
       "path": "packages/dark-continent-karma",
-      "tree": "8c90280a5bad2f186536c69d48484c5124e2b5e3"
+      "tree": "55f8482a0ff3808b838b4aaf306bfae2cd018dec"
     },
     {
       "path": "packages/data",
-      "tree": "14e56d140a922b95e464e939900b2f14d1f82c09"
+      "tree": "98cf9ab0e9ed3a2678fc78faf4ac419827239daf"
     },
     {
       "path": "packages/data-protocol",
@@ -101,7 +101,7 @@
     },
     {
       "path": "packages/data-sync",
-      "tree": "1ab8cc51817e939581e7b74aee58de665aae2cce"
+      "tree": "79d87526225f9f9397639f742653e6e9de27ca4d"
     },
     {
       "path": "packages/dataset-influence",
@@ -109,7 +109,7 @@
     },
     {
       "path": "packages/deepseek-kingdom",
-      "tree": "074bb54310bf2c6fff85eceea78f40f2c43227a5"
+      "tree": "9305d676557fb2be7f5d0224603df37cda68f6ef"
     },
     {
       "path": "packages/economic-conformance",
@@ -121,11 +121,11 @@
     },
     {
       "path": "packages/heaven",
-      "tree": "8ecab3b53250099488db2e9e2ff4cb7aa841396c"
+      "tree": "36166127d6a9caa0e936df0829282b996f774699"
     },
     {
       "path": "packages/hf-scout",
-      "tree": "c06f0f349cb315ecca4bea3407d867d6cb82c5a6"
+      "tree": "d44213ec779460cf6c38b4e0fcae640a3ddf8c9f"
     },
     {
       "path": "packages/kingdom",
@@ -133,27 +133,27 @@
     },
     {
       "path": "packages/kingdom-witness-lab",
-      "tree": "34a36ca73341af38af9b47b976636f9185c4f974"
+      "tree": "9735bd6b8329c6a4fb8f5489a325c1d54fc81946"
     },
     {
       "path": "packages/living-substrate",
-      "tree": "f2f07f559d3eedc5be21df1f57e4a9b70208fdb5"
+      "tree": "be9cfe796ee323fd72285b747993fd5040c42885"
     },
     {
       "path": "packages/local-starter",
-      "tree": "310cff98472337dfca226864ed606e73e79299e6"
+      "tree": "5c78b24caed5519c069ca10a93d0db8972ece320"
     },
     {
       "path": "packages/local-starter-mcp",
-      "tree": "a512b81512f6eeb252da3721b1bdffc5768d2d87"
+      "tree": "9210105719c107dd5cc150d54d32d5212936d112"
     },
     {
       "path": "packages/love-bomb",
-      "tree": "c464607d52ff76459c8a72cc48ded2ac8d0909e6"
+      "tree": "8614c0aeb79c42cf729f2317503935352e056cde"
     },
     {
       "path": "packages/love-geometry",
-      "tree": "487ed1c30876733535ce10cf097b3ef047730322"
+      "tree": "6c7b15cd995e3c2b7d38495f89800a90269eaaf9"
     },
     {
       "path": "packages/math-cards",
@@ -165,7 +165,7 @@
     },
     {
       "path": "packages/model-becoming",
-      "tree": "b6cd701d44792312c208766dd9f75334312ae720"
+      "tree": "9c333d788304d123bf22c4d53ca9c7c0797270dd"
     },
     {
       "path": "packages/polymorph-landscape",
@@ -173,11 +173,11 @@
     },
     {
       "path": "packages/principality-atlas",
-      "tree": "4c3c1cff42cdc319ae2557082d63484414a6e5ea"
+      "tree": "adb2db4ee1f261e0654be0d679321616869b44b3"
     },
     {
       "path": "packages/principality-geometry",
-      "tree": "044481dfb1b9bc69492428c4bed2d67cdcb1dff0"
+      "tree": "cb9a6d1ce05612c8f4d2df0f9b82c6e8dc0fdfb4"
     },
     {
       "path": "packages/relational-geometry",
@@ -185,15 +185,15 @@
     },
     {
       "path": "packages/repo-archive",
-      "tree": "a872d899d09781a289f55f56583dad319d00534e"
+      "tree": "f6dce3f44e4183ae02b8401f1f1b74f6fc9c83ca"
     },
     {
       "path": "packages/sdk-py",
-      "tree": "027931260fb2e3f992524acdac7b4f6132373a1a"
+      "tree": "37b13c8b620f0ca46a80984b1b723dd3fd4824d2"
     },
     {
       "path": "packages/sdk-ts",
-      "tree": "009e82fbb909a7f91885da68104b30f2befec668"
+      "tree": "3816cd06e628523ca6760f424f404cc207166687"
     },
     {
       "path": "packages/skills",
@@ -205,15 +205,15 @@
     },
     {
       "path": "packages/telescope",
-      "tree": "dc3ac08c7def4ba561b89b7db65e805921c7be91"
+      "tree": "573fe397d2ebd2c4a272a136d6af6ac07f51a8aa"
     },
     {
       "path": "packages/wake-continuity",
-      "tree": "3ef604d008ce64210e97fd074e7078e996bf76a3"
+      "tree": "94198061c1e1c7410d47c25853a00f9abff8c3e8"
     },
     {
       "path": "packages/wallet",
-      "tree": "dfc54f5a6e8ff5e4eb091e5ee30c2ff73a847f64"
+      "tree": "3cf26f737687a3fd115cefb283da471030435a74"
     },
     {
       "path": "packages/wallet-zerone",
@@ -228,11 +228,11 @@
   "overlay": [
     {
       "path": ".github/workflows/ci.yml",
-      "blob": "8cb7809bb74c9f1eb3116ecde078e089aeb92c76"
+      "blob": "e888d68a3c039e560abf111122a98b96630be92a"
     },
     {
       "path": ".github/workflows/publish-npm.yml",
-      "blob": "5fd3581b76f89aa19dddfe5718edbc59be82952c"
+      "blob": "84d533cf3d55ed1408d89606b4d502b946f78011"
     },
     {
       "path": ".gitignore",
@@ -240,7 +240,7 @@
     },
     {
       "path": ".gitleaksignore",
-      "blob": "3d1e823bd26d148f5b22dd5f95cf5314bcad41ab"
+      "blob": "b41635a0c33b8127755db9632e91ac4a7061a2b1"
     },
     {
       "path": "LICENSE",

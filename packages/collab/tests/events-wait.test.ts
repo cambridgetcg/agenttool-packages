@@ -8,6 +8,7 @@ import { canonicalJson } from "../src/canonical.js";
 import { buildCollabMcpServer } from "../src/mcp.js";
 import { MAX_WAIT_ANCHOR_BYTES, MAX_WAIT_PAGE_BYTES, MAX_WAIT_RESPONSE_BYTES, type EventCursor, type JournalPage } from "../src/protocol.js";
 import { CollabStore } from "../src/store.js";
+import { COLLAB_PACKAGE_VERSION } from "../src/version.js";
 
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => { while (cleanup.length) await cleanup.pop()!(); });
@@ -59,7 +60,7 @@ function secondConnection(f: ReturnType<typeof fixture>) {
 }
 async function worker(f: ReturnType<typeof fixture>, mode: string) {
   const child = Bun.spawn([process.execPath, join(import.meta.dir, "events-wait-worker.ts"), mode, f.path, f.root], {
-    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", TMPDIR: "/tmp" },
+    env: { PATH: process.env.PATH ?? "", HOME: f.directory, TMPDIR: tmpdir(), GIT_CEILING_DIRECTORIES: tmpdir() },
     stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
   cleanup.push(async () => { child.kill(); await child.exited; });
@@ -306,7 +307,7 @@ describe("bounded anchored local observation", () => {
   test(`the bundled stdio protocol validates bounds and stops real waits on ${stop}`, async () => {
     const f = fixture();
     const child = Bun.spawn([process.execPath, join(import.meta.dir, "../dist/agenttool-collab-mcp.js")], {
-      env: { PATH: process.env.PATH ?? "", HOME: f.directory, TMPDIR: "/tmp", AGENTOOL_COLLAB_DB: f.path },
+      env: { PATH: process.env.PATH ?? "", HOME: f.directory, TMPDIR: tmpdir(), GIT_CEILING_DIRECTORIES: tmpdir(), AGENTOOL_COLLAB_DB: f.path },
       stdin: "pipe", stdout: "pipe", stderr: "pipe",
     });
     cleanup.push(async () => { child.kill(); await child.exited; });
@@ -337,7 +338,9 @@ describe("bounded anchored local observation", () => {
       return receive(id);
     };
     await send({ id: 1, method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "fixture", version: "1" } } });
-    expect((await receive(1)).result.serverInfo.version).toBe("0.5.0");
+    const initialized = (await receive(1)).result;
+    expect(initialized.serverInfo.version).toBe(COLLAB_PACKAGE_VERSION);
+    expect(initialized.instructions).toStartWith(`Collab ${COLLAB_PACKAGE_VERSION}: `);
     await send({ method: "notifications/initialized", params: {} });
     const start = await call(2, "collab_session_start", { root_path: f.root, actor: "stdio-observer" });
     expect(start.result.isError).toBeUndefined();

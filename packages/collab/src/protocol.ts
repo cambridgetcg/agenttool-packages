@@ -119,7 +119,8 @@ export type SessionStatus = "active" | "ended";
 /**
  * Derived view, never stored: an active session whose last_seen_at is older
  * than SESSION_STALE_AFTER_MS reads as stale; an ended session never reads as
- * live. Staleness changes no status, expires nothing, and grants nothing.
+ * live. Staleness changes no session status and grants nothing; a session lease
+ * whose TTL has also passed becomes recoverable (README "Session-fit migration").
  */
 export type SessionLiveness = "live" | "stale";
 export const SESSION_STALE_AFTER_MS = 6 * 60 * 60 * 1000;
@@ -230,6 +231,7 @@ export interface Task {
   assignee_liveness: SessionLiveness | null;
   claim_worktree_id: string | null;
   lease_id: string | null;
+  /** Stored TTL floor. A live credential-bound holder keeps the lease beyond it. */
   lease_expires_at: string | null;
   blocker: string | null;
   latest_progress: string | null;
@@ -423,7 +425,7 @@ export interface TaskConflict {
   }>;
 }
 
-/** Bounded local observation in Collab 0.5.0; limits are UTF-8 JSON bytes. */
+/** Bounded local observation since Collab 0.5.0; limits are UTF-8 JSON bytes. */
 export const DEFAULT_WAIT_EVENT_LIMIT = 10;
 export const MAX_WAIT_EVENT_LIMIT = 50;
 export const MAX_WAIT_MS = 30_000;
